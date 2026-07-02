@@ -26,7 +26,6 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from app.log import logger
 from app.plugins import _PluginBase
-from fastapi import Request
 from app.schemas import NotificationType
 
 # 日志行解析正则
@@ -165,7 +164,7 @@ class LogMonitorTransfer(_PluginBase):
             },
         ]
 
-    async def _browse_dir_api(self, request: Request):
+    async def _browse_dir_api(self, request):
         """GET /browse_dir?path=&storage= 列出子目录"""
         path = request.query_params.get("path", "/")
         storage = request.query_params.get("storage", "")
