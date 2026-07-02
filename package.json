@@ -3,7 +3,7 @@
     "id": "LogMonitorTransfer",
     "name": "日志监控转存整理",
     "description": "监控指定插件的日志输出，命中关键词后延迟将文件夹加入 MP 整理队列，支持本地与 CloudDrive2 等网盘路径",
-    "version": "1.6",
+    "version": "1.7",
     "author": "WorkBuddy",
     "level": 2,
     "v2": true

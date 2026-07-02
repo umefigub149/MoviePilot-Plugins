@@ -3,11 +3,12 @@
     "name": "日志监控转存整理",
     "description": "监控指定插件的日志输出，命中关键词后延迟将文件夹加入 MP 整理队列，支持本地与 CloudDrive2 等网盘路径",
     "labels": "日志,监控,整理,CloudDrive2",
-    "version": "1.6",
+    "version": "1.7",
     "icon": "",
     "author": "WorkBuddy",
     "level": 2,
     "history": {
+      "v1.7": "修复插件无法加载（移除顶层 fastapi Request 导入）；修复 CD2 目录列表为空（_list_storage_dirs 改用 FileItem 直构造绕过 get_file_item 根路径限制）；get_form 强制尝试 CloudDrive储存 不依赖当前 storage_type",
       "v1.6": "新增 StorageChain 网盘目录实时列表：VCombobox 可下拉搜索 CD2/115 真实目录（限 3 层深/500 条），配合搜索过滤实现路径快速定位；新增 /browse_dir API 端点支持目录浏览",
       "v1.5": "目录选择由 VSelect（仅下拉选择）改为 VCombobox（可下拉选择也可自由输入），CD2 用户可直接输入任意网盘内部路径如 /115/电影，无需在 MP 设置中预先配置；更新提示信息",
       "v1.4": "规则组目录路径由文本输入改为下拉选择：自动从 MP「设置→目录」已配置的目录抽取（download_path/library_path 等），降低填错路径概率；保留旧版 rule_groups 文本配置向后兼容",
