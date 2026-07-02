@@ -1,0 +1,19 @@
+{
+  "LogMonitorTransfer": {
+    "name": "日志监控转存整理",
+    "description": "监控指定插件的日志输出，命中关键词后延迟将文件夹加入 MP 整理队列，支持本地与 CloudDrive2 等网盘路径",
+    "labels": "日志,监控,整理,CloudDrive2",
+    "version": "1.5",
+    "icon": "",
+    "author": "WorkBuddy",
+    "level": 2,
+    "history": {
+      "v1.5": "目录选择由 VSelect（仅下拉选择）改为 VCombobox（可下拉选择也可自由输入），CD2 用户可直接输入任意网盘内部路径如 /115/电影，无需在 MP 设置中预先配置；更新提示信息",
+      "v1.4": "规则组目录路径由文本输入改为下拉选择：自动从 MP「设置→目录」已配置的目录抽取（download_path/library_path 等），降低填错路径概率；保留旧版 rule_groups 文本配置向后兼容",
+      "v1.3": "新增存储类型选择（local/CloudDrive储存/自定义），适配 CloudDrive2 通过 clouddrivedisk 插件挂载 115 等网盘路径，网盘路径不再做本地存在性检查",
+      "v1.2": "修复插件无法加载：添加 VForm 包裹、改用 logger、添加 get_api/get_command、修复 get_service 触发器",
+      "v1.1": "修复导入兼容性，延迟加载依赖",
+      "v1.0": "首次发布：支持多插件选择、多组规则映射、延迟整理、防重复触发"
+    }
+  }
+}
