@@ -26,6 +26,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from app.log import logger
 from app.plugins import _PluginBase
+from fastapi import Request
 from app.schemas import NotificationType
 
 # 日志行解析正则
@@ -73,7 +74,7 @@ class LogMonitorTransfer(_PluginBase):
     # 插件图标
     plugin_icon = ""
     # 插件版本
-    plugin_version = "1.5"
+    plugin_version = "1.6"
     # 插件作者
     plugin_author = "WorkBuddy"
     # 作者主页
@@ -154,7 +155,42 @@ class LogMonitorTransfer(_PluginBase):
         return []
 
     def get_api(self) -> List[Dict[str, Any]]:
-        return []
+        return [
+            {
+                "path": "/browse_dir",
+                "endpoint": self._browse_dir_api,
+                "methods": ["GET"],
+                "summary": "浏览目录",
+                "description": "返回指定路径的子目录列表",
+            },
+        ]
+
+    async def _browse_dir_api(self, request: Request):
+        """GET /browse_dir?path=&storage= 列出子目录"""
+        path = request.query_params.get("path", "/")
+        storage = request.query_params.get("storage", "")
+        if not storage:
+            return {"code": 1, "msg": "缺少 storage 参数"}
+        try:
+            from app.chain.storage import StorageChain
+            chain = StorageChain()
+            dir_item = chain.get_file_item(storage=storage, path=path)
+            if not dir_item:
+                return {"code": 1, "msg": f"路径不存在: {path}"}
+            children = chain.list_files(dir_item)
+            if not children:
+                return {"code": 0, "data": {"path": path, "items": []}}
+            items = []
+            for child in children:
+                if getattr(child, 'type', '') == 'dir':
+                    items.append({
+                        "name": getattr(child, 'name', ''),
+                        "path": getattr(child, 'path', ''),
+                        "is_dir": True,
+                    })
+            return {"code": 0, "data": {"path": path, "items": sorted(items, key=lambda x: x["name"])}}
+        except Exception as e:
+            return {"code": 1, "msg": f"浏览目录失败: {str(e)}"}
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
         if not self._installed_plugins:
@@ -179,6 +215,19 @@ class LogMonitorTransfer(_PluginBase):
             dir_items = []
         if not dir_items:
             dir_items = [{"title": "(无已配置目录，请先在 MP 设置→目录中配置)", "value": ""}]
+
+        # 追加 CD2 等网盘目录（通过 StorageChain 实时列出）
+        try:
+            storage_name = self._resolve_storage_name()
+            if storage_name and storage_name != "local":
+                storage_items = self._list_storage_dirs(storage_name, "/", max_depth=3, max_items=500)
+                existing = {d["value"] for d in dir_items if d["value"]}
+                for item in storage_items:
+                    if item["value"] not in existing:
+                        existing.add(item["value"])
+                        dir_items.append(item)
+        except Exception as e:
+            logger.warn(f"追加网盘目录选项失败: {e}")
 
         # 生成 5 行结构化规则 UI
         rule_rows = []
@@ -410,7 +459,7 @@ class LogMonitorTransfer(_PluginBase):
                     f"关键词 [{kw}] -> 文件夹 {folder} | "
                     f"剩余 {remaining.seconds // 60} 分钟 {remaining.seconds % 60} 秒"
                 )
-        return [
+        components = [
             {
                 "component": "VAlert",
                 "props": {
@@ -418,8 +467,24 @@ class LogMonitorTransfer(_PluginBase):
                     "variant": "tonal",
                     "text": "\n".join(pending_info) if pending_info else "暂无待执行的延迟任务",
                 },
-            }
+            },
         ]
+
+        # 目录浏览 API 说明
+        storage_name = self._resolve_storage_name()
+        if storage_name and storage_name != "local":
+            components.append({
+                "component": "VAlert",
+                "props": {
+                    "type": "info",
+                    "variant": "tonal",
+                    "text": (f"目录浏览 API 已启用\n"
+                             f"存储类型: {storage_name}\n"
+                             f"使用 GET /api/v1/plugin/LogMonitorTransfer/browse_dir?storage={storage_name}&path=/ 浏览目录"),
+                },
+            })
+
+        return components
 
     def get_service(self) -> List[Dict[str, Any]]:
         if not self._enabled:
@@ -453,6 +518,47 @@ class LogMonitorTransfer(_PluginBase):
         if self._storage_type == "__custom__":
             return self._custom_storage_name or "local"
         return self._storage_type or "local"
+
+    def _list_storage_dirs(self, storage_name: str, root_path: str = "/", max_depth: int = 3, max_items: int = 500) -> List[Dict]:
+        """递归列出存储中的目录，返回 [{"title": "[storage] /path", "value": "/path"}, ...]"""
+        items = []
+        visited = set()
+
+        try:
+            from app.chain.storage import StorageChain
+
+            chain = StorageChain()
+
+            def _walk(path, depth):
+                if depth > max_depth or len(items) >= max_items:
+                    return
+                if path in visited:
+                    return
+                visited.add(path)
+
+                try:
+                    dir_item = chain.get_file_item(storage=storage_name, path=path)
+                    if not dir_item or dir_item.type != "dir":
+                        return
+                    children = chain.list_files(dir_item)
+                    if not children:
+                        return
+                    for child in children:
+                        if getattr(child, 'type', '') == 'dir':
+                            child_path = getattr(child, 'path', '')
+                            if child_path and child_path not in visited and len(items) < max_items:
+                                title = f"[{storage_name}] {child_path}"
+                                items.append({"title": title, "value": child_path})
+                                visited.add(child_path)
+                                _walk(child_path, depth + 1)
+                except Exception:
+                    pass  # silently skip inaccessible directories
+
+            _walk(root_path, 1)
+        except Exception as e:
+            logger.warn(f"列出存储目录失败 [{storage_name}]: {e}")
+
+        return items
 
     def _check_logs(self):
         if not self._enabled:
