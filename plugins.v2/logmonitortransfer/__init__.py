@@ -217,10 +217,11 @@ class LogMonitorTransfer(_PluginBase):
             dir_items = [{"title": "(无已配置目录，请先在 MP 设置→目录中配置)", "value": ""}]
 
         # 追加 CD2 等网盘目录（通过 StorageChain 实时列出）
+        # 注意: get_form() 在 init_plugin 前调用，self._storage_type 此时为默认值 "local"
+        # 因此不能依赖 self._resolve_storage_name()，直接强制尝试 CloudDrive储存
         try:
-            storage_name = self._resolve_storage_name()
-            if storage_name and storage_name != "local":
-                storage_items = self._list_storage_dirs(storage_name, "/", max_depth=3, max_items=500)
+            for try_storage in ["CloudDrive储存"]:
+                storage_items = self._list_storage_dirs(try_storage, "/", max_depth=3, max_items=500)
                 existing = {d["value"] for d in dir_items if d["value"]}
                 for item in storage_items:
                     if item["value"] not in existing:
