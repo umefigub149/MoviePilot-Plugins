@@ -527,6 +527,7 @@ class LogMonitorTransfer(_PluginBase):
 
         try:
             from app.chain.storage import StorageChain
+            from app.schemas import FileItem
 
             chain = StorageChain()
 
@@ -538,20 +539,18 @@ class LogMonitorTransfer(_PluginBase):
                 visited.add(path)
 
                 try:
-                    dir_item = chain.get_file_item(storage=storage_name, path=path)
-                    if not dir_item or dir_item.type != "dir":
-                        return
+                    # 直接用 FileItem 构造目录对象，避免 get_file_item 对 CD2 根路径 / 返回 None
+                    dir_item = FileItem(storage=storage_name, path=path, type="dir")
                     children = chain.list_files(dir_item)
                     if not children:
                         return
                     for child in children:
-                        if getattr(child, 'type', '') == 'dir':
-                            child_path = getattr(child, 'path', '')
-                            if child_path and child_path not in visited and len(items) < max_items:
-                                title = f"[{storage_name}] {child_path}"
-                                items.append({"title": title, "value": child_path})
-                                visited.add(child_path)
-                                _walk(child_path, depth + 1)
+                        child_type = getattr(child, 'type', '')
+                        child_path = getattr(child, 'path', '')
+                        if child_type == 'dir' and child_path and child_path not in visited and len(items) < max_items:
+                            title = f"[{storage_name}] {child_path}"
+                            items.append({"title": title, "value": child_path})
+                            _walk(child_path, depth + 1)
                 except Exception:
                     pass  # silently skip inaccessible directories
 
