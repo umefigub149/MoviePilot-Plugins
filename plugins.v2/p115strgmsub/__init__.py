@@ -680,8 +680,9 @@ class P115StrgmSub(_PluginBase):
         # HDHive OpenAPI 客户端初始化（API 模式搜索/解锁共用；Playwright 模式搜索时动态创建浏览器客户端）
         self._init_hdhive_openapi_client(proxy)
         if self._hdhive_enabled:
-            if self._hdhive_query_mode == "playwright" and (not self._hdhive_username or not self._hdhive_password):
-                logger.warning("HDHive (Playwright 模式) 已启用但未配置用户名和密码，将无法使用 HDHive 查询功能")
+            if self._hdhive_query_mode == "playwright" and not (
+                    self._hdhive_cookie or (self._hdhive_username and self._hdhive_password)):
+                logger.warning("HDHive (Playwright 模式) 已启用但未配置 Cookie 或用户名密码，将无法使用 HDHive 查询功能")
             elif self._hdhive_query_mode == "api" and (not self._hdhive_client or not self._hdhive_client.is_ready):
                 logger.warning("HDHive (API 模式) 已启用但未完成 OpenAPI 应用配置和用户授权，将无法使用 HDHive 查询功能")
             else:

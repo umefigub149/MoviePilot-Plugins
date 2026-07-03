@@ -289,7 +289,7 @@ class UIConfig:
                         'content': [{
                             'component': 'VCol',
                             'props': {'cols': 12},
-                            'content': [{'component': 'VAlert', 'props': {'type': 'info', 'variant': 'tonal', 'text': 'HDHive资源查询：基于TMDB ID查询115网盘资源。API模式使用OpenAPI应用查询；Playwright模式使用浏览器模拟获取分享链接（需安装 playwright 和 chromium）'}}]
+                            'content': [{'component': 'VAlert', 'props': {'type': 'info', 'variant': 'tonal', 'text': 'HDHive资源查询：基于TMDB ID查询115网盘资源。API模式使用OpenAPI应用查询；浏览器模式无需OpenAPI，优先使用HDHive Cookie，也可用账号密码登录（需安装 playwright 和 chromium）'}}]
                         }]
                     },
                     # HDHive OpenAPI 接入说明
@@ -314,7 +314,7 @@ class UIConfig:
                              'content': [{'component': 'VSwitch', 'props': {'model': 'hdhive_enabled', 'label': '启用 HDHive'}}]},
                             {'component': 'VCol', 'props': {'cols': 12, 'md': 4},
                              'content': [{'component': 'VSelect', 'props': {'model': 'hdhive_query_mode', 'label': '查询模式',
-                                 'items': [{'title': 'API 模式', 'value': 'api'}, {'title': 'Playwright 模式', 'value': 'playwright'}]}}]},
+                                 'items': [{'title': 'OpenAPI 模式', 'value': 'api'}, {'title': '浏览器模式（无需 OpenAPI）', 'value': 'playwright'}]}}]},
                             {'component': 'VCol', 'props': {'cols': 12, 'md': 4},
                              'content': [{'component': 'VTextField', 'props': {"clearable": True, 'model': 'hdhive_client_id', 'label': 'HDHive Client ID', 'placeholder': 'OpenAPI 应用公开 ID（app_xxx）'}}]}
                         ]
@@ -337,9 +337,9 @@ class UIConfig:
                         'component': 'VRow',
                         'content': [
                             {'component': 'VCol', 'props': {'cols': 12, 'md': 4},
-                             'content': [{'component': 'VTextField', 'props': {'model': 'hdhive_username', 'label': 'HDHive 用户名', 'placeholder': 'Playwright 模式下需要'}}]},
+                             'content': [{'component': 'VTextField', 'props': {'model': 'hdhive_username', 'label': 'HDHive 用户名', 'placeholder': '浏览器模式兜底登录，可留空优先使用 Cookie'}}]},
                             {'component': 'VCol', 'props': {'cols': 12, 'md': 5},
-                             'content': [{'component': 'VTextField', 'props': {"clearable": True, 'model': 'hdhive_password', 'label': 'HDHive 密码', 'type': 'password', 'placeholder': 'Playwright 模式下需要'}}]}
+                             'content': [{'component': 'VTextField', 'props': {"clearable": True, 'model': 'hdhive_password', 'label': 'HDHive 密码', 'type': 'password', 'placeholder': '浏览器模式兜底登录，可留空优先使用 Cookie'}}]}
                         ]
                     },
                     # HDHive 积分配置

@@ -74,6 +74,7 @@ class SearchHandler:
         self._only_115 = only_115
         self._pansou_channels = pansou_channels
         self._search_source_order = search_source_order or []
+        self._hdhive_browser_client = None
 
     def get_enabled_sources(self) -> List[str]:
         """
@@ -95,7 +96,9 @@ class SearchHandler:
 
         # HDHive
         if self._hdhive_enabled:
-            if self._hdhive_query_mode == "playwright" and self._hdhive_username and self._hdhive_password:
+            if self._hdhive_query_mode == "playwright" and (
+                self._hdhive_cookie or (self._hdhive_username and self._hdhive_password)
+            ):
                 available.append("hdhive")
             elif self._hdhive_query_mode == "api" and self._hdhive_client and self._hdhive_client.is_ready:
                 available.append("hdhive")
@@ -317,7 +320,6 @@ class SearchHandler:
         :param season: 季号（电视剧时使用）
         :return: 115网盘资源列表（统一格式）
         """
-        from ..lib.hdhive import MediaType as HDHiveMediaType
         if not mediainfo.tmdb_id:
             logger.warning(f"{mediainfo.title} 缺少 TMDB ID，无法使用 HDHive 查询")
             return []
@@ -325,73 +327,103 @@ class SearchHandler:
         hdhive_media_type = "movie" if media_type == MediaType.MOVIE else "tv"
 
         if self._hdhive_query_mode == "playwright":
-            return self._search_hdhive_playwright(mediainfo, HDHiveMediaType.MOVIE if media_type == MediaType.MOVIE else HDHiveMediaType.TV)
+            return self._search_hdhive_playwright(mediainfo, hdhive_media_type)
         else:
             return self._search_hdhive_api(mediainfo, hdhive_media_type)
 
-    def _search_hdhive_playwright(self, mediainfo: MediaInfo, hdhive_media_type) -> List[Dict]:
+    def _get_hdhive_browser_client(self):
+        """Create or reuse the HDHive browser client."""
+        if self._hdhive_browser_client:
+            return self._hdhive_browser_client
+
+        from ..clients import HDHiveBrowserClient
+
+        self._hdhive_browser_client = HDHiveBrowserClient(
+            cookie=self._hdhive_cookie,
+            username=self._hdhive_username,
+            password=self._hdhive_password,
+            proxy=settings.PROXY,
+            get_data_func=self._get_data_func,
+            save_data_func=self._save_data_func,
+            headless=True,
+        )
+        return self._hdhive_browser_client
+
+    def _search_hdhive_playwright(self, mediainfo: MediaInfo, hdhive_media_type: str) -> List[Dict]:
         """
-        使用 Playwright 浏览器模拟模式查询 HDHive 资源
-        需要用户名和密码进行登录
+        使用 Playwright 浏览器模拟模式查询 HDHive 资源。
+        Cookie 优先，账号密码作为 Cookie 缺失时的登录兜底。
         """
-        if not self._hdhive_username or not self._hdhive_password:
-            logger.warning("HDHive Playwright 模式需要配置用户名和密码")
+        if not self._hdhive_cookie and not (self._hdhive_username and self._hdhive_password):
+            logger.warning("HDHive Playwright 模式需要配置 Cookie 或用户名密码")
             return []
 
         try:
-            import asyncio
-            from ..lib.hdhive import create_async_client as create_hdhive_async_client
+            client = self._get_hdhive_browser_client()
+            logger.info(f"使用 HDHive (Playwright) 查询: {mediainfo.title} (TMDB ID: {mediainfo.tmdb_id})")
 
-            proxy = settings.PROXY
+            resources = client.get_resources(hdhive_media_type, mediainfo.tmdb_id)
+            results = []
+            for resource in resources:
+                title = resource.get("title") or mediainfo.title
+                slug = resource.get("slug", "")
+                unlock_points = resource.get("unlock_points")
+                is_free = resource.get("is_free") or resource.get("is_unlocked") or unlock_points in (None, 0)
 
-            logger.info(f"使用 HDHive (Playwright) 查询: {mediainfo.title} (TMDB ID: {mediainfo.tmdb_id})，代理：{proxy}")
+                logger.info(
+                    f"HDHive (Playwright) 处理资源: title='{title}', slug='{slug}', "
+                    f"unlock_points={unlock_points}, is_free={is_free}"
+                )
 
-            async def async_search():
-                async with create_hdhive_async_client(
-                    username=self._hdhive_username,
-                    password=self._hdhive_password,
-                    cookie=self._hdhive_cookie,
-                    browser_type="chromium",
-                    headless=True,
-                    proxy=proxy,
-                    state_file=f"hdhive_{self._hdhive_username}_state.json"
-                ) as client:
-                    # 获取媒体信息
-                    media = await client.get_media_by_tmdb_id(mediainfo.tmdb_id, hdhive_media_type)
-                    if not media:
-                        return []
+                if not slug:
+                    logger.info(f"HDHive (Playwright) 资源缺少 slug，跳过: {resource}")
+                    continue
 
-                    # 获取资源列表
-                    resources_result = await client.get_resources(media.slug, hdhive_media_type, media_id=media.id)
-                    if not resources_result or not resources_result.success:
-                        return []
+                if not is_free and unlock_points is not None:
+                    if unlock_points > self._hdhive_max_points_per_sub:
+                        logger.info(f"HDHive (Playwright) 资源 {title} 单次解锁积分 ({unlock_points}) 超出单订阅预算上限 ({self._hdhive_max_points_per_sub})，跳过")
+                        continue
+                    if unlock_points > self._hdhive_max_unlock_points:
+                        logger.info(f"HDHive (Playwright) 资源 {title} 单次解锁积分 ({unlock_points}) 超出全局预算上限 ({self._hdhive_max_unlock_points})，跳过")
+                        continue
 
-                    # 过滤免费的 115 资源并获取分享链接
-                    free_115_resources = []
-                    for res in resources_result.resources:
-                        if hasattr(res, 'website') and res.website.value == '115' and res.is_free:
-                            share_result = await client.get_share_url_by_click(res.slug)
-                            if share_result and share_result.url:
-                                free_115_resources.append({
-                                    "url": share_result.url,
-                                    "title": res.title,
-                                    "update_time": ""
-                                })
-
-                    return free_115_resources
-
-            # 运行异步任务
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                results = loop.run_until_complete(async_search())
-            finally:
-                loop.close()
+                if is_free:
+                    try:
+                        unlock_data = client.unlock_resource(slug)
+                    except Exception as e:
+                        logger.error(f"HDHive (Playwright) 免费资源取链接失败: {slug}, 错误: {e}")
+                        continue
+                    share_url = unlock_data.get("full_url") or unlock_data.get("url") or ""
+                    if share_url:
+                        results.append({
+                            "url": share_url,
+                            "title": title,
+                            "update_time": resource.get("created_at", ""),
+                            "is_official": bool(resource.get("is_official"))
+                        })
+                elif self._hdhive_auto_unlock:
+                    results.append({
+                        "url": "",
+                        "title": title,
+                        "update_time": resource.get("created_at", ""),
+                        "slug": slug,
+                        "need_unlock": True,
+                        "unlock_points": unlock_points or 0,
+                        "is_official": bool(resource.get("is_official"))
+                    })
+                else:
+                    logger.info(f"HDHive (Playwright) 资源 {title} 非免费且未开启自动解锁，已跳过")
 
             if results:
-                logger.info(f"HDHive (Playwright) 找到 {len(results)} 个免费 115 资源")
+                results.sort(key=lambda r: (
+                    r.get("need_unlock", False),
+                    not r.get("is_official", False)
+                ))
+                free_count = sum(1 for r in results if not r.get("need_unlock"))
+                unlock_count = sum(1 for r in results if r.get("need_unlock"))
+                logger.info(f"HDHive (Playwright) 共得到 {len(results)} 个 115 资源（免费: {free_count}, 待自费解锁: {unlock_count}）")
             else:
-                logger.info(f"HDHive (Playwright) 未找到免费 115 资源")
+                logger.info("HDHive (Playwright) 未找到可用 115 资源")
             return results
 
         except Exception as e:
@@ -580,19 +612,49 @@ class SearchHandler:
         :param unlock_points: 本次需消耗的积分
         :return: 成功返回真实的 url，失败返回 None
         """
-        from ..clients import HDHiveOpenAPIError
-
-        if not self._hdhive_client or not self._hdhive_client.is_ready:
-            logger.warning("HDHive API 模式需要配置应用 Secret 并完成用户授权才能解锁")
+        if not self._hdhive_auto_unlock and unlock_points > 0:
+            logger.warning("HDHive 自动解锁资源未开启，跳过收费资源解锁")
             return None
 
         # 双层检查积分预算
         if (self._current_spent_points + unlock_points) > self._hdhive_max_unlock_points:
-            logger.warning(f"HDHive (API) 全局积分预算不足！全局已花费 {self._current_spent_points}，需 {unlock_points}，全局总预算 {self._hdhive_max_unlock_points}")
+            logger.warning(f"HDHive 全局积分预算不足！全局已花费 {self._current_spent_points}，需 {unlock_points}，全局总预算 {self._hdhive_max_unlock_points}")
             return None
 
         if (self._sub_spent_points + unlock_points) > self._hdhive_max_points_per_sub:
-            logger.warning(f"HDHive (API) 单订阅积分预算不足！本订阅已花费 {self._sub_spent_points}，需 {unlock_points}，单订阅预算 {self._hdhive_max_points_per_sub}")
+            logger.warning(f"HDHive 单订阅积分预算不足！本订阅已花费 {self._sub_spent_points}，需 {unlock_points}，单订阅预算 {self._hdhive_max_points_per_sub}")
+            return None
+
+        if self._hdhive_query_mode == "playwright":
+            try:
+                import time
+
+                client = self._get_hdhive_browser_client()
+                logger.info(f"HDHive (Playwright) 触发按需解锁资源: {slug}")
+                try:
+                    unlock_data = client.unlock_resource(slug)
+                finally:
+                    time.sleep(2)
+
+                share_url = unlock_data.get("full_url") or unlock_data.get("url") or ""
+                if share_url:
+                    self._current_spent_points += unlock_points
+                    self._sub_spent_points += unlock_points
+                    if self._current_sub_key:
+                        history = self._load_sub_points_history()
+                        history[self._current_sub_key] = self._sub_spent_points
+                        self._save_sub_points_history(history)
+                    logger.info(f"HDHive (Playwright) 成功扣除 {unlock_points} 积分解锁，获得分享链接: {share_url}")
+                    return share_url
+                logger.error(f"HDHive (Playwright) 解锁失败，返回数据: {unlock_data}")
+            except Exception as e:
+                logger.error(f"HDHive (Playwright) 解锁异常: {e}")
+            return None
+
+        from ..clients import HDHiveOpenAPIError
+
+        if not self._hdhive_client or not self._hdhive_client.is_ready:
+            logger.warning("HDHive API 模式需要配置应用 Secret 并完成用户授权才能解锁")
             return None
 
         try:
