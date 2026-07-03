@@ -22,6 +22,11 @@ except Exception:  # pragma: no cover - MoviePilot runtime may install later
     PlaywrightTimeoutError = TimeoutError
     sync_playwright = None
 
+try:
+    from cloakbrowser import launch_context as cloak_launch_context
+except Exception:  # pragma: no cover - depends on MoviePilot runtime
+    cloak_launch_context = None
+
 
 class HDHiveBrowserError(Exception):
     """Raised when browser automation cannot complete the requested action."""
@@ -155,21 +160,65 @@ class HDHiveBrowserClient:
             raise last_error
         raise HDHiveBrowserError("HDHive browser authenticated operation failed")
 
+    @staticmethod
+    def _browser_backend() -> str:
+        if cloak_launch_context:
+            return "cloakbrowser"
+        if sync_playwright:
+            return "playwright"
+        raise HDHiveBrowserError(
+            "HDHive browser mode needs cloakbrowser or playwright. "
+            "Newer MoviePilot builds usually include cloakbrowser."
+        )
+
     @contextmanager
     def _new_context(self) -> Iterator[Any]:
-        if not sync_playwright:
-            raise HDHiveBrowserError("Playwright is not installed")
+        backend = self._browser_backend()
+        if backend == "cloakbrowser":
+            proxy_url = None
+            raw_proxy = self._proxy or settings.PROXY
+            if isinstance(raw_proxy, str):
+                proxy_url = raw_proxy
+            elif isinstance(raw_proxy, dict):
+                proxy_url = raw_proxy.get("https") or raw_proxy.get("http") or raw_proxy.get("server")
+
+            kwargs = {
+                "headless": self._headless,
+                "humanize": getattr(settings, "CLOAKBROWSER_HUMANIZE", True),
+            }
+            human_preset = getattr(settings, "CLOAKBROWSER_HUMAN_PRESET", None)
+            if human_preset:
+                kwargs["human_preset"] = human_preset
+            if proxy_url:
+                kwargs["proxy"] = proxy_url
+
+            context = cloak_launch_context(**kwargs)
+            try:
+                yield context
+            finally:
+                context.close()
+            return
 
         proxy_config = self._parse_proxy(self._proxy or settings.PROXY)
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(
-                headless=self._headless,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-dev-shm-usage",
-                ],
-                proxy=proxy_config,
-            )
+            try:
+                browser = pw.chromium.launch(
+                    headless=self._headless,
+                    channel="chromium",
+                    args=[
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-dev-shm-usage",
+                        "--no-sandbox",
+                        "--disable-setuid-sandbox",
+                    ],
+                    proxy=proxy_config,
+                )
+            except Exception as e:
+                raise HDHiveBrowserError(
+                    "Playwright Chromium executable is missing. "
+                    "Install browser binaries with `playwright install chromium`, "
+                    "or use a MoviePilot image that includes cloakbrowser."
+                ) from e
             context = browser.new_context(
                 locale="zh-CN",
                 timezone_id=getattr(settings, "TZ", "Asia/Shanghai"),
