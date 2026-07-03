@@ -351,6 +351,41 @@ class HDHiveBrowserClient:
         return "115" in href or "115" in text
 
     @staticmethod
+    def _looks_like_resource(resource: Dict[str, Any]) -> bool:
+        keys = (
+            "size",
+            "resolution",
+            "video_resolution",
+            "share_size",
+            "source",
+            "slug",
+            "unlock_points",
+            "href",
+            "title",
+        )
+        return any(key in resource for key in keys)
+
+    @classmethod
+    def _extract_resource_items(cls, payload: Any) -> List[Dict[str, Any]]:
+        found: List[Dict[str, Any]] = []
+
+        def walk(value: Any):
+            if isinstance(value, list):
+                dicts = [item for item in value if isinstance(item, dict)]
+                if dicts and any(cls._looks_like_resource(item) for item in dicts[:3]):
+                    found.extend(dicts)
+                    return
+                for item in value:
+                    walk(item)
+            elif isinstance(value, dict):
+                for key in ("data", "resources", "list", "items", "results", "records"):
+                    if key in value:
+                        walk(value.get(key))
+
+        walk(payload)
+        return found
+
+    @staticmethod
     def _scrape_cards_script() -> str:
         return r"""
         () => {
@@ -366,7 +401,11 @@ class HDHiveBrowserClient:
                 if (!text.includes('\u53d1\u5e03\u4e8e') && !text.includes('\u79ef\u5206') && !text.includes('\u514d\u8d39')) continue;
                 let hrefEl = el;
                 while (hrefEl && hrefEl.tagName !== 'A') hrefEl = hrefEl.parentElement;
-                const href = hrefEl ? (hrefEl.getAttribute('href') || '') : '';
+                let href = hrefEl ? (hrefEl.getAttribute('href') || '') : '';
+                if (!href) {
+                    const childLink = el.querySelector('a[href*="/resource/"]');
+                    href = childLink ? (childLink.getAttribute('href') || '') : '';
+                }
                 if (href && !href.includes('/resource/115/') && !href.includes('/resource/')) continue;
                 candidates.push({el, text, href});
             }
@@ -427,6 +466,7 @@ class HDHiveBrowserClient:
         def _operation(context: Any) -> List[Dict[str, Any]]:
             page = context.new_page()
             captured: List[Dict[str, Any]] = []
+            captured_urls = set()
 
             def on_response(response: Any):
                 try:
@@ -436,68 +476,84 @@ class HDHiveBrowserClient:
                     if "json" not in content_type:
                         return
                     body = response.json()
-                    data = body.get("data") if isinstance(body, dict) else None
-                    if isinstance(data, dict):
-                        data = data.get("resources") or data.get("list") or data.get("items")
-                    if not isinstance(data, list):
-                        return
-                    if not data or not isinstance(data[0], dict):
-                        return
-                    first = data[0]
-                    resource_keys = (
-                        "size",
-                        "resolution",
-                        "video_resolution",
-                        "share_size",
-                        "source",
-                        "slug",
-                        "unlock_points",
-                        "href",
-                    )
-                    if any(key in first for key in resource_keys):
-                        captured.extend(item for item in data if isinstance(item, dict))
+                    items = self._extract_resource_items(body)
+                    if items:
+                        captured.extend(items)
+                        captured_urls.add(response.url)
                 except Exception:
                     pass
 
             page.on("response", on_response)
+            logger.info(f"HDHive (Browser) 访问资源页: {detail_url}")
             page.goto(detail_url, wait_until="domcontentloaded", timeout=30000)
             page.wait_for_timeout(1500)
+            logger.info(f"HDHive (Browser) 当前页面: {page.url}")
             if "/login" in page.url:
                 raise HDHiveLoginError("HDHive cookie was redirected to login page")
 
             try:
+                dismiss = page.locator("button:has-text('我知道了')")
+                dismiss.first.wait_for(state="visible", timeout=1500)
+                dismiss.first.click()
+                logger.info("HDHive (Browser) 已关闭提示弹窗")
+            except Exception:
+                pass
+
+            clicked_115_tab = False
+            try:
                 tab = page.locator("button:has-text('115网盘'), [role='tab']:has-text('115网盘'), button:has-text('115'), [role='tab']:has-text('115')")
                 tab.first.wait_for(state="visible", timeout=10000)
                 tab.first.click()
+                clicked_115_tab = True
                 page.wait_for_timeout(1000)
             except Exception:
                 try:
-                    page.evaluate("""
+                    clicked_115_tab = bool(page.evaluate("""
                     () => {
                         for (const el of document.querySelectorAll('button,[role="tab"]')) {
                             if ((el.innerText || '').includes('115')) {
                                 el.click();
-                                break;
+                                return true;
                             }
                         }
+                        return false;
                     }
-                    """)
+                    """))
                     page.wait_for_timeout(1000)
                 except Exception:
                     pass
+            logger.info(f"HDHive (Browser) 115标签点击结果: {'成功' if clicked_115_tab else '未确认'}")
 
             deadline = time() + 8
             while time() < deadline and not captured:
                 page.wait_for_timeout(250)
 
-            resources = captured or page.evaluate(self._scrape_cards_script()) or []
+            if captured:
+                logger.info(f"HDHive (Browser) 接口捕获资源: {len(captured)} 条，来源接口数: {len(captured_urls)}")
+                resources = captured
+            else:
+                logger.info("HDHive (Browser) 接口未捕获资源，开始 DOM 兜底解析")
+                try:
+                    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    page.wait_for_timeout(500)
+                except Exception:
+                    pass
+                resources = page.evaluate(self._scrape_cards_script()) or []
+                logger.info(f"HDHive (Browser) DOM 兜底解析资源: {len(resources)} 条")
+
             normalized = []
+            skipped_no_slug = 0
+            skipped_non_115 = 0
             for resource in resources:
                 if not isinstance(resource, dict):
                     continue
                 slug = self._slug_from_resource(resource)
                 href = resource.get("href") or resource.get("url") or ""
                 if not slug and not self._is_115_resource(resource):
+                    skipped_non_115 += 1
+                    continue
+                if not slug:
+                    skipped_no_slug += 1
                     continue
                 title = (
                     resource.get("title")
@@ -517,6 +573,10 @@ class HDHiveBrowserClient:
                     "is_official": bool(resource.get("is_official") or resource.get("official")),
                     "created_at": resource.get("created_at") or resource.get("posted_at") or "",
                 })
+            logger.info(
+                f"HDHive (Browser) 规范化资源: {len(normalized)} 条，"
+                f"跳过非115/无关: {skipped_non_115}，跳过缺少slug: {skipped_no_slug}"
+            )
             return normalized
         return self._run_authenticated(_operation)
 

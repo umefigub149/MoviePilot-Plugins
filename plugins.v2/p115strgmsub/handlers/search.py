@@ -363,7 +363,13 @@ class SearchHandler:
             logger.info(f"使用 HDHive (Playwright) 查询: {mediainfo.title} (TMDB ID: {mediainfo.tmdb_id})")
 
             resources = client.get_resources(hdhive_media_type, mediainfo.tmdb_id)
+            logger.info(f"HDHive (Playwright) 浏览器返回原始资源: {len(resources)} 个")
             results = []
+            skipped_no_slug = 0
+            skipped_budget = 0
+            skipped_auto_unlock = 0
+            free_count = 0
+            unlock_count = 0
             for resource in resources:
                 title = resource.get("title") or mediainfo.title
                 slug = resource.get("slug", "")
@@ -376,18 +382,22 @@ class SearchHandler:
                 )
 
                 if not slug:
+                    skipped_no_slug += 1
                     logger.info(f"HDHive (Playwright) 资源缺少 slug，跳过: {resource}")
                     continue
 
                 if not is_free and unlock_points is not None:
                     if unlock_points > self._hdhive_max_points_per_sub:
+                        skipped_budget += 1
                         logger.info(f"HDHive (Playwright) 资源 {title} 单次解锁积分 ({unlock_points}) 超出单订阅预算上限 ({self._hdhive_max_points_per_sub})，跳过")
                         continue
                     if unlock_points > self._hdhive_max_unlock_points:
+                        skipped_budget += 1
                         logger.info(f"HDHive (Playwright) 资源 {title} 单次解锁积分 ({unlock_points}) 超出全局预算上限 ({self._hdhive_max_unlock_points})，跳过")
                         continue
 
                 if is_free:
+                    free_count += 1
                     try:
                         unlock_data = client.unlock_resource(slug)
                     except Exception as e:
@@ -402,6 +412,7 @@ class SearchHandler:
                             "is_official": bool(resource.get("is_official"))
                         })
                 elif self._hdhive_auto_unlock:
+                    unlock_count += 1
                     results.append({
                         "url": "",
                         "title": title,
@@ -412,6 +423,7 @@ class SearchHandler:
                         "is_official": bool(resource.get("is_official"))
                     })
                 else:
+                    skipped_auto_unlock += 1
                     logger.info(f"HDHive (Playwright) 资源 {title} 非免费且未开启自动解锁，已跳过")
 
             if results:
@@ -419,11 +431,15 @@ class SearchHandler:
                     r.get("need_unlock", False),
                     not r.get("is_official", False)
                 ))
-                free_count = sum(1 for r in results if not r.get("need_unlock"))
-                unlock_count = sum(1 for r in results if r.get("need_unlock"))
-                logger.info(f"HDHive (Playwright) 共得到 {len(results)} 个 115 资源（免费: {free_count}, 待自费解锁: {unlock_count}）")
+                result_free_count = sum(1 for r in results if not r.get("need_unlock"))
+                result_unlock_count = sum(1 for r in results if r.get("need_unlock"))
+                logger.info(f"HDHive (Playwright) 共得到 {len(results)} 个可用 115 资源（免费: {result_free_count}, 待自费解锁: {result_unlock_count}）")
             else:
-                logger.info("HDHive (Playwright) 未找到可用 115 资源")
+                logger.info(
+                    f"HDHive (Playwright) 未找到可用 115 资源。"
+                    f"浏览器原始资源: {len(resources)}，免费候选: {free_count}，待解锁候选: {unlock_count}，"
+                    f"缺少slug跳过: {skipped_no_slug}，预算跳过: {skipped_budget}，自动解锁关闭跳过: {skipped_auto_unlock}"
+                )
             return results
 
         except Exception as e:
