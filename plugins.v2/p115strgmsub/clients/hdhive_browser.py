@@ -338,13 +338,15 @@ class HDHiveBrowserClient:
 
     @staticmethod
     def _is_115_resource(resource: Dict[str, Any]) -> bool:
+        href = str(resource.get("href") or resource.get("url") or "")
+        if "/resource/115/" in href:
+            return True
         for key in ("pan_type", "website", "source", "type"):
             value = resource.get(key)
             if isinstance(value, dict):
                 value = value.get("value") or value.get("name")
             if value and "115" in str(value):
                 return True
-        href = str(resource.get("href") or resource.get("url") or "")
         text = str(resource.get("title") or "") + " " + str(resource.get("content") or "")
         return "115" in href or "115" in text
 
@@ -355,23 +357,45 @@ class HDHiveBrowserClient:
             const sizeRe = /(\d+\.?\d*)\s*(TB|GB|MB|G(?!B)|M(?!B))/i;
             const pointsRe = /(\d+)\s*\u79ef\u5206/;
             const dateRe = /\u53d1\u5e03\u4e8e\s*([\d/\-]+)/;
-            const cards = [];
+            const resRe = /\b(4K|8K|2K|1080[piP]?|720[piP]?|480[piP]?)\b/;
+            const candidates = [];
             for (const el of document.querySelectorAll('a,div,article,li,section')) {
                 const text = el.innerText || '';
-                if (!text.includes('115')) continue;
-                if (text.length < 12 || text.length > 5000) continue;
-                if (!sizeRe.test(text) && !text.includes('\u79ef\u5206') && !text.includes('\u514d\u8d39')) continue;
+                if (text.length < 20 || text.length > 5000) continue;
+                if (!sizeRe.test(text)) continue;
+                if (!text.includes('\u53d1\u5e03\u4e8e') && !text.includes('\u79ef\u5206') && !text.includes('\u514d\u8d39')) continue;
                 let hrefEl = el;
                 while (hrefEl && hrefEl.tagName !== 'A') hrefEl = hrefEl.parentElement;
                 const href = hrefEl ? (hrefEl.getAttribute('href') || '') : '';
+                if (href && !href.includes('/resource/115/') && !href.includes('/resource/')) continue;
+                candidates.push({el, text, href});
+            }
+
+            const minimal = candidates.filter(
+                item => !candidates.some(other => other.el !== item.el && item.el.contains(other.el))
+            );
+
+            const metaTerms = new Set([
+                '4K','8K','2K','WEB-DL','WEBRip','BDRip','REMUX','HDTV',
+                '\u514d\u8d39','\u5b98\u7ec4','\u7ba1\u7406\u5458',
+                '1080P','1080p','720P','720p','480P','480p'
+            ]);
+
+            const cards = [];
+            for (const item of minimal) {
+                const text = item.text;
+                const href = item.href;
                 const lines = text.split('\n').map(v => v.trim()).filter(Boolean);
                 const points = text.match(pointsRe);
                 const date = text.match(dateRe);
+                const size = text.match(sizeRe);
+                const resolution = text.match(resRe);
                 const isFree = text.includes('\u514d\u8d39') || !points;
                 const title = lines
                     .filter(line => !line.includes('\u53d1\u5e03\u4e8e'))
                     .filter(line => !/^\d+\s*\u79ef\u5206$/.test(line))
                     .filter(line => !/^\d+\.?\d*\s*(TB|GB|MB|G|M)$/i.test(line))
+                    .filter(line => !metaTerms.has(line))
                     .slice(0, 3)
                     .join(' ')
                     .trim();
@@ -381,6 +405,8 @@ class HDHiveBrowserClient:
                     is_free: isFree,
                     unlock_points: isFree ? 0 : parseInt(points[1]),
                     created_at: date ? date[1] : '',
+                    size: size ? (size[1] + ' ' + size[2].toUpperCase()) : '',
+                    resolution: resolution ? resolution[1] : '',
                     pan_type: '115',
                     is_official: text.includes('\u5b98\u7ec4') || text.includes('\u7ba1\u7406\u5458')
                 });
@@ -415,9 +441,21 @@ class HDHiveBrowserClient:
                         data = data.get("resources") or data.get("list") or data.get("items")
                     if not isinstance(data, list):
                         return
-                    for item in data:
-                        if isinstance(item, dict) and self._is_115_resource(item):
-                            captured.append(item)
+                    if not data or not isinstance(data[0], dict):
+                        return
+                    first = data[0]
+                    resource_keys = (
+                        "size",
+                        "resolution",
+                        "video_resolution",
+                        "share_size",
+                        "source",
+                        "slug",
+                        "unlock_points",
+                        "href",
+                    )
+                    if any(key in first for key in resource_keys):
+                        captured.extend(item for item in data if isinstance(item, dict))
                 except Exception:
                     pass
 
@@ -428,12 +466,25 @@ class HDHiveBrowserClient:
                 raise HDHiveLoginError("HDHive cookie was redirected to login page")
 
             try:
-                tab = page.locator("button:has-text('115'), [role='tab']:has-text('115')")
-                if tab.count():
-                    tab.first.click()
-                    page.wait_for_timeout(1000)
+                tab = page.locator("button:has-text('115网盘'), [role='tab']:has-text('115网盘'), button:has-text('115'), [role='tab']:has-text('115')")
+                tab.first.wait_for(state="visible", timeout=10000)
+                tab.first.click()
+                page.wait_for_timeout(1000)
             except Exception:
-                pass
+                try:
+                    page.evaluate("""
+                    () => {
+                        for (const el of document.querySelectorAll('button,[role="tab"]')) {
+                            if ((el.innerText || '').includes('115')) {
+                                el.click();
+                                break;
+                            }
+                        }
+                    }
+                    """)
+                    page.wait_for_timeout(1000)
+                except Exception:
+                    pass
 
             deadline = time() + 8
             while time() < deadline and not captured:
@@ -442,9 +493,12 @@ class HDHiveBrowserClient:
             resources = captured or page.evaluate(self._scrape_cards_script()) or []
             normalized = []
             for resource in resources:
-                if not isinstance(resource, dict) or not self._is_115_resource(resource):
+                if not isinstance(resource, dict):
                     continue
                 slug = self._slug_from_resource(resource)
+                href = resource.get("href") or resource.get("url") or ""
+                if not slug and not self._is_115_resource(resource):
+                    continue
                 title = (
                     resource.get("title")
                     or resource.get("name")
@@ -456,7 +510,7 @@ class HDHiveBrowserClient:
                 normalized.append({
                     "title": str(title),
                     "slug": slug,
-                    "href": resource.get("href") or resource.get("url") or "",
+                    "href": href,
                     "unlock_points": 0 if is_free else points,
                     "is_free": is_free,
                     "is_unlocked": bool(resource.get("is_unlocked")),
