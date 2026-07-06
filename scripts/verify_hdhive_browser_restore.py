@@ -39,8 +39,8 @@ assert "/tmdb/" in browser, "HDHiveBrowserClient must search HDHive TMDB detail 
 assert "/resource/115/{slug}" in browser, "HDHiveBrowserClient must unlock115 resource pages by slug"
 
 plugin = manifest["P115StrgmSub"]
-assert plugin["version"] == "1.5.4-u4", "package.v2.json must bump P115StrgmSub version to1.5.4-u4"
-assert "v1.5.4-u4" in plugin["history"], "package.v2.json must add v1.5.4-u4 history entry"
-assert "不用 OpenAPI" in plugin["history"]["v1.5.4-u4"] or "无需 OpenAPI" in plugin["history"]["v1.5.4-u4"], "v1.5.4-u4 history must state OpenAPI is not required for browser mode"
+assert plugin["version"] == "1.5.5", "package.v2.json must bump P115StrgmSub version to 1.5.5"
+assert "v1.5.5" in plugin["history"], "package.v2.json must add v1.5.5 history entry"
+assert "不用 OpenAPI" in plugin["history"]["v1.5.5"] or "无需 OpenAPI" in plugin["history"]["v1.5.5"], "v1.5.5 history must state OpenAPI is not required for browser mode"
 
 print("HDHive browser restore verification passed")
