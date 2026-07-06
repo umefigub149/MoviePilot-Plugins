@@ -39,7 +39,7 @@ class P115StrgmSub(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "1.5.4-u3"
+    plugin_version = "1.5.4-u4"
     # 插件作者
     plugin_author = "mrtian2016"
     # 作者主页
@@ -87,7 +87,7 @@ class P115StrgmSub(_PluginBase):
     _hdhive_cookie: str = ""
     _hdhive_auto_refresh: bool = False
     _hdhive_refresh_before: int = 86400
-    _hdhive_query_mode: str = "api"
+    _hdhive_query_mode: str = "playwright"
     # OpenAPI 应用凭证：应用 Secret 放 X-API-Key（沿用 hdhive_api_key 配置键）
     _hdhive_api_key: str = ""
     _hdhive_client_id: str = ""
@@ -569,7 +569,8 @@ class P115StrgmSub(_PluginBase):
             self._nullbr_api_key = config.get("nullbr_api_key", "")
 
             self._hdhive_enabled = config.get("hdhive_enabled", False)
-            self._hdhive_query_mode = config.get("hdhive_query_mode", "api")
+            # 默认恢复旧版无 OpenAPI 路径：新配置优先使用浏览器/Cookie 模式；已有配置仍按保存值生效。
+            self._hdhive_query_mode = config.get("hdhive_query_mode", "playwright")
             self._hdhive_api_key = (config.get("hdhive_api_key", "") or "").strip()
             self._hdhive_client_id = (config.get("hdhive_client_id", "") or "").strip()
             self._hdhive_redirect_uri = (config.get("hdhive_redirect_uri", "") or "").strip()
@@ -677,8 +678,11 @@ class P115StrgmSub(_PluginBase):
                 self._nullbr_client = NullbrClient(app_id=self._nullbr_appid, api_key=self._nullbr_api_key, proxy=proxy)
                 logger.info("Nullbr 客户端初始化成功")
 
-        # HDHive OpenAPI 客户端初始化（API 模式搜索/解锁共用；Playwright 模式搜索时动态创建浏览器客户端）
-        self._init_hdhive_openapi_client(proxy)
+        # HDHive OpenAPI 客户端仅在 API 模式或用户提交授权码时初始化；浏览器模式不输出 OpenAPI 授权误导日志。
+        if self._hdhive_query_mode == "api" or self._hdhive_auth_code:
+            self._init_hdhive_openapi_client(proxy)
+        else:
+            self._hdhive_client = None
         if self._hdhive_enabled:
             if self._hdhive_query_mode == "playwright" and not (
                     self._hdhive_cookie or (self._hdhive_username and self._hdhive_password)):

@@ -298,12 +298,8 @@ class UIConfig:
                         'content': [{
                             'component': 'VCol',
                             'props': {'cols': 12},
-                            'content': [{'component': 'VAlert', 'props': {'type': 'warning', 'variant': 'tonal',
-                                'text': 'HDHive 已升级为 OpenAPI 应用 + OAuth 用户授权，旧个人 API Key 已失效。接入步骤：'
-                                        '① 在影巢申请 OpenAPI 应用（回调模式选 redirect，scope 勾选 query/unlock），获得 Client ID 和应用 Secret；'
-                                        '② 在下方填写 Client ID、应用 Secret、回调地址（须与应用配置一致）并保存；'
-                                        '③ 打开插件日志中输出的授权链接，登录影巢确认授权；'
-                                        '④ 授权后浏览器跳转到回调地址，复制地址栏中 code= 后面的授权码填入下方「授权码」并保存，插件会自动换取并维护用户 Token。'}}]
+                            'content': [{'component': 'VAlert', 'props': {'type': 'info', 'variant': 'tonal',
+                                'text': '推荐：浏览器模式（无需 OpenAPI）。只要配置 HDHive Cookie，或配置用户名/密码作为兜底登录，即可恢复旧版自动搜索 HDHive115资源、自动转存、自动追更路径。OpenAPI 模式仅作为可选高级模式：需要 Client ID、应用 Secret、回调地址、授权码和用户 Token；不使用 OpenAPI 时这些字段全部可以留空。'}}]
                         }]
                     },
                     # HDHive 配置
@@ -332,10 +328,12 @@ class UIConfig:
                                  'hint': '一次性使用，换取 Token 成功后自动清空', 'persistent-hint': True}}]}
                         ]
                     },
-                    # HDHive 账号密码配置
+                    # HDHive 浏览器模式凭证
                     {
                         'component': 'VRow',
                         'content': [
+                            {'component': 'VCol', 'props': {'cols': 12},
+                             'content': [{'component': 'VTextarea', 'props': {"clearable": True, 'model': 'hdhive_cookie', 'label': 'HDHive Cookie（浏览器模式推荐）', 'type': 'password', 'placeholder': '从浏览器复制 hdhive.com 登录后的 Cookie；无需 OpenAPI 时优先填写此项', 'rows': 2, 'auto-grow': True, 'hint': 'Cookie 优先；留空时才尝试使用下方用户名/密码兜底登录', 'persistent-hint': True}}]},
                             {'component': 'VCol', 'props': {'cols': 12, 'md': 4},
                              'content': [{'component': 'VTextField', 'props': {'model': 'hdhive_username', 'label': 'HDHive 用户名', 'placeholder': '浏览器模式兜底登录，可留空优先使用 Cookie'}}]},
                             {'component': 'VCol', 'props': {'cols': 12, 'md': 5},
@@ -446,7 +444,7 @@ class UIConfig:
             "nullbr_appid": "",
             "nullbr_api_key": "",
             "hdhive_enabled": False,
-            "hdhive_query_mode": "api",
+            "hdhive_query_mode": "playwright",
             "hdhive_api_key": "",
             "hdhive_client_id": "",
             "hdhive_redirect_uri": "",
