@@ -389,70 +389,77 @@ class HDHiveBrowserClient:
     def _scrape_cards_script() -> str:
         return r"""
         () => {
-            const sizeRe = /(\d+\.?\d*)\s*(TB|GB|MB|G(?!B)|M(?!B))/i;
+            const sizeRe = /(\d+\.?\d*)\s*(TB|GB|MB|G(?!B)|M(?!B))\b/i;
             const pointsRe = /(\d+)\s*\u79ef\u5206/;
             const dateRe = /\u53d1\u5e03\u4e8e\s*([\d/\-]+)/;
-            const resRe = /\b(4K|8K|2K|1080[piP]?|720[piP]?|480[piP]?)\b/;
+            const resRe = /\b(4K|8K|2K|1080[piP]?|720[piP]?|480[piP]?)/i;
             const candidates = [];
             for (const el of document.querySelectorAll('a,div,article,li,section')) {
                 const text = el.innerText || '';
-                if (text.length < 20 || text.length > 5000) continue;
-                if (!sizeRe.test(text)) continue;
-                if (!text.includes('\u53d1\u5e03\u4e8e') && !text.includes('\u79ef\u5206') && !text.includes('\u514d\u8d39')) continue;
-                let hrefEl = el;
+                if (!text.includes('\u53d1\u5e03\u4e8e') || !sizeRe.test(text)) continue;
+                if ((text.match(/\u53d1\u5e03\u4e8e/g) || []).length !== 1) continue;
+                if (text.length < 30 || text.length > 5000) continue;
+                candidates.push(el);
+            }
+            const minimal = candidates.filter(
+                el => !candidates.some(other => other !== el && el.contains(other))
+            );
+            const metaTerms = new Set([
+                '4K','8K','2K','免费','官组','管理员','WEB-DL','WEBRip','BDRip','REMUX','HDTV',
+                '简中','繁中','简英','繁英','内封','外挂','内嵌','简日','繁日','简韩','繁韩',
+                '1080P','1080p','720P','720p','480P','480p','蓝光原盘','ISO','加入片单'
+            ]);
+            const cards = minimal.map(card => {
+                const text = card.innerText || '';
+                const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+                const dateMatch = text.match(dateRe);
+                const sizeMatch = text.match(sizeRe);
+                const resMatch = text.match(resRe);
+                const pointsMatch = text.match(pointsRe);
+                const isFree = text.includes('免费') || !pointsMatch;
+                const tags = [];
+                if (text.includes('官组') || text.includes('管理员')) tags.push('官组');
+                if (isFree) tags.push('免费');
+                if (pointsMatch) tags.push(pointsMatch[0].trim());
+                const dateLineIdx = lines.findIndex(l => /发布于/.test(l));
+                const user = dateLineIdx > 0 ? lines[dateLineIdx - 1] : (lines[0] || '');
+                const titleLines = lines.filter(l => {
+                    if (l.length < 3) return false;
+                    if (metaTerms.has(l)) return false;
+                    if (/^发布于/.test(l)) return false;
+                    if (/^\d+\s*积分$/.test(l)) return false;
+                    if (/^\d+\.?\d*\s*(T?B|G[Bi]?|M[Bi]?)$/i.test(l)) return false;
+                    if (l === user) return false;
+                    return true;
+                });
+                let title = titleLines
+                    .map(l => l.replace(/^\d+\s*积分\s*/, '').trim())
+                    .filter(Boolean).join(' ').trim();
+                let hrefEl = card;
                 while (hrefEl && hrefEl.tagName !== 'A') hrefEl = hrefEl.parentElement;
                 let href = hrefEl ? (hrefEl.getAttribute('href') || '') : '';
                 if (!href) {
-                    const childLink = el.querySelector('a[href*="/resource/"]');
+                    const childLink = card.querySelector('a[href*="/resource/115/"]');
                     href = childLink ? (childLink.getAttribute('href') || '') : '';
                 }
-                if (href && !href.includes('/resource/115/') && !href.includes('/resource/')) continue;
-                candidates.push({el, text, href});
-            }
-
-            const minimal = candidates.filter(
-                item => !candidates.some(other => other.el !== item.el && item.el.contains(other.el))
-            );
-
-            const metaTerms = new Set([
-                '4K','8K','2K','WEB-DL','WEBRip','BDRip','REMUX','HDTV',
-                '\u514d\u8d39','\u5b98\u7ec4','\u7ba1\u7406\u5458',
-                '1080P','1080p','720P','720p','480P','480p'
-            ]);
-
-            const cards = [];
-            for (const item of minimal) {
-                const text = item.text;
-                const href = item.href;
-                const lines = text.split('\n').map(v => v.trim()).filter(Boolean);
-                const points = text.match(pointsRe);
-                const date = text.match(dateRe);
-                const size = text.match(sizeRe);
-                const resolution = text.match(resRe);
-                const isFree = text.includes('\u514d\u8d39') || !points;
-                const title = lines
-                    .filter(line => !line.includes('\u53d1\u5e03\u4e8e'))
-                    .filter(line => !/^\d+\s*\u79ef\u5206$/.test(line))
-                    .filter(line => !/^\d+\.?\d*\s*(TB|GB|MB|G|M)$/i.test(line))
-                    .filter(line => !metaTerms.has(line))
-                    .slice(0, 3)
-                    .join(' ')
-                    .trim();
-                cards.push({
+                return {
+                    user,
                     title,
                     href,
+                    posted_at: dateMatch ? dateMatch[1] : '',
+                    created_at: dateMatch ? dateMatch[1] : '',
+                    tags,
+                    resolution: resMatch ? resMatch[1] : '',
+                    size: sizeMatch ? (sizeMatch[1] + ' ' + sizeMatch[2].toUpperCase()) : '',
                     is_free: isFree,
-                    unlock_points: isFree ? 0 : parseInt(points[1]),
-                    created_at: date ? date[1] : '',
-                    size: size ? (size[1] + ' ' + size[2].toUpperCase()) : '',
-                    resolution: resolution ? resolution[1] : '',
-                    pan_type: '115',
-                    is_official: text.includes('\u5b98\u7ec4') || text.includes('\u7ba1\u7406\u5458')
-                });
-            }
+                    unlock_points: isFree ? 0 : (pointsMatch ? parseInt(pointsMatch[1]) : null),
+                    pan_type: href.includes('/resource/115/') ? '115' : '',
+                    is_official: text.includes('官组') || text.includes('管理员')
+                };
+            }).filter(item => item.href && item.href.includes('/resource/115/'));
             const seen = new Set();
             return cards.filter(item => {
-                const key = (item.href || '') + '|' + (item.title || '');
+                const key = item.href || item.title || JSON.stringify(item);
                 if (seen.has(key)) return false;
                 seen.add(key);
                 return true;
@@ -523,6 +530,17 @@ class HDHiveBrowserClient:
                 except Exception:
                     pass
             logger.info(f"HDHive (Browser) 115标签点击结果: {'成功' if clicked_115_tab else '未确认'}")
+
+            # 部分 HDHive/MUI 页面中 115 标签已经默认选中，但文字由图标+多行文本组成，
+            # Playwright 的 has-text('115网盘') 不一定能确认点击；这里先做一次 DOM 兜底解析，
+            # 避免在已有资源卡片的页面上空等接口响应导致返回 0。
+            try:
+                pre_resources = page.evaluate(self._scrape_cards_script()) or []
+                if pre_resources:
+                    logger.info(f"HDHive (Browser) 标签点击后 DOM 预解析资源: {len(pre_resources)} 条")
+                    captured.extend(pre_resources)
+            except Exception as e:
+                logger.debug(f"HDHive (Browser) DOM 预解析失败: {e}")
 
             deadline = time() + 8
             while time() < deadline and not captured:
