@@ -41,10 +41,11 @@ assert "标签点击后 DOM 预解析资源" in browser, "HDHiveBrowserClient mu
 assert "发布于" in browser and "minimal.map" in browser, "HDHiveBrowserClient DOM scraper must use DDSRem-style minimal resource card parsing"
 assert "p115strmhelper/hdhive_cookies.json" in browser, "HDHiveBrowserClient must reuse P115StrmHelper HDHive cookie as fallback"
 assert "P115StrmHelper Cookie" in browser, "HDHiveBrowserClient must retry with P115StrmHelper cookie when configured cookie is stale"
+assert "safe_extract_url" in browser and "Execution context was destroyed" in browser, "HDHiveBrowserClient unlock must tolerate navigation during 115 URL extraction"
 
 plugin = manifest["P115StrgmSub"]
-assert plugin["version"] == "1.5.7", "package.v2.json must bump P115StrgmSub version to 1.5.7"
-assert "v1.5.7" in plugin["history"], "package.v2.json must add v1.5.7 history entry"
-assert "不用 OpenAPI" in plugin["history"]["v1.5.7"] or "无需 OpenAPI" in plugin["history"]["v1.5.7"], "v1.5.7 history must state OpenAPI is not required for browser mode"
+assert plugin["version"] == "1.5.8", "package.v2.json must bump P115StrgmSub version to 1.5.8"
+assert "v1.5.8" in plugin["history"], "package.v2.json must add v1.5.8 history entry"
+assert "不用 OpenAPI" in plugin["history"]["v1.5.8"] or "无需 OpenAPI" in plugin["history"]["v1.5.8"], "v1.5.8 history must state OpenAPI is not required for browser mode"
 
 print("HDHive browser restore verification passed")

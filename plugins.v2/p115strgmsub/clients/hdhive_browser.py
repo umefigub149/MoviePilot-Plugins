@@ -663,6 +663,10 @@ class HDHiveBrowserClient:
 
             page.on("response", on_response)
             page.goto(f"{self.BASE_URL}/resource/115/{slug}", wait_until="domcontentloaded", timeout=30000)
+            try:
+                page.wait_for_load_state("networkidle", timeout=15000)
+            except Exception:
+                pass
             page.wait_for_timeout(1500)
             if "/login" in page.url:
                 raise HDHiveLoginError("HDHive cookie was redirected to login page")
@@ -670,8 +674,8 @@ class HDHiveBrowserClient:
             extract_script = r"""
             () => {
                 const re = /^https?:\/\/(115cdn|115)\.com\//;
-                for (const el of document.querySelectorAll('input,textarea')) {
-                    const value = (el.value || '').trim();
+                for (const el of document.querySelectorAll('input,textarea,a,code,div,span,p')) {
+                    const value = ((el.value || el.href || el.textContent || '') + '').trim();
                     if (re.test(value)) return value;
                 }
                 const text = document.body ? document.body.innerText || '' : '';
@@ -679,28 +683,51 @@ class HDHiveBrowserClient:
                 return match ? match[0] : '';
             }
             """
-            existing = page.evaluate(extract_script)
-            if existing:
-                url = self._extract_115_url(existing)
-                return {"url": url, "full_url": url, "already_owned": True}
+
+            def safe_extract_url(timeout_seconds: int = 20) -> str:
+                deadline = time() + timeout_seconds
+                last_error = ""
+                while time() < deadline:
+                    if captured_url:
+                        return self._extract_115_url(captured_url)
+                    try:
+                        value = page.evaluate(extract_script)
+                        url = self._extract_115_url(value)
+                        if url:
+                            return url
+                    except Exception as e:
+                        last_error = str(e)
+                        if "Execution context was destroyed" in last_error or "navigation" in last_error.lower():
+                            try:
+                                page.wait_for_load_state("domcontentloaded", timeout=5000)
+                            except Exception:
+                                pass
+                        else:
+                            logger.debug(f"HDHive (Browser) 提取115链接失败，将重试: {e}")
+                    page.wait_for_timeout(500)
+                if last_error:
+                    logger.debug(f"HDHive (Browser) 提取115链接超时，最后错误: {last_error}")
+                return ""
+
+            existing_url = safe_extract_url(timeout_seconds=8)
+            if existing_url:
+                return {"url": existing_url, "full_url": existing_url, "already_owned": True}
 
             confirm = page.locator(
                 "button:has-text('\u786e\u5b9a\u89e3\u9501'), "
                 "button:has-text('\u89e3\u9501'), "
-                "[role='button']:has-text('\u786e\u5b9a\u89e3\u9501')"
+                "[role='button']:has-text('\u786e\u5b9a\u89e3\u9501'), "
+                "[role='button']:has-text('\u89e3\u9501')"
             )
             if not confirm.count():
                 raise HDHiveBrowserError("HDHive unlock button was not found")
             confirm.first.click()
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=10000)
+            except Exception:
+                pass
 
-            deadline = time() + 20
-            url = ""
-            while time() < deadline:
-                url = captured_url or self._extract_115_url(page.evaluate(extract_script))
-                if url:
-                    break
-                page.wait_for_timeout(500)
-
+            url = safe_extract_url(timeout_seconds=25)
             if not url:
                 raise HDHiveBrowserError("HDHive unlock did not expose a 115 URL")
             return {"url": url, "full_url": url, "already_owned": False}
