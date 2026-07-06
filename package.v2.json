@@ -23,11 +23,12 @@
     "release": true,
     "description": "结合MoviePilot订阅功能，自动搜索115网盘资源并转存缺失剧集。",
     "labels": "订阅,115网盘",
-    "version": "1.5.6",
+    "version": "1.5.7",
     "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/cloud.png",
     "author": "mrtian2016",
     "level": 1,
     "history": {
+      "v1.5.7": "1. 修复 HDHive 浏览器模式（无需 OpenAPI）配置 Cookie 过期但仍可打开公开详情页时资源卡片为空的问题：优先复用 P115StrmHelper 已维护的 HDHive Cookie，再回退插件缓存和配置 Cookie。2. 验证旧配置 stale token 下可重新解析出 /resource/115/ 资源卡片。",
       "v1.5.6": "1. 修复 HDHive 浏览器模式（无需 OpenAPI）在 MUI 页面中 115 标签已默认选中但无法被点击确认时返回 0 资源的问题：点击后立即进行 DOM 预解析，并改用 DDSRem 风格的最小资源卡片解析，能识别 /resource/115/ 链接、发布时间、积分、体积和分辨率。2. 增加验证脚本覆盖 DOM 预解析逻辑。",
       "v1.5.5": "1. 恢复 HDHive 浏览器/Cookie 模式为默认推荐路径：新配置不用 OpenAPI也可通过 HDHive Cookie 或用户名密码搜索115资源并继续自动追更转存。2. OpenAPI 模式保留为可选高级模式，配置页明确区分无需 OpenAPI 的浏览器模式与需 OAuth 的 OpenAPI 模式。",
       "v1.5.4-u3": "1. 完整对齐 DDSRem 的 HDHive 浏览器资源抓取流程：访问 TMDB 资源页、处理提示弹窗、明确点击 115 网盘标签、递归捕获资源接口、接口无结果时滚动并执行 DOM 兜底解析。2. 增加诊断日志，显示页面 URL、标签点击结果、接口捕获数量、DOM 解析数量、规范化数量以及 slug/预算/自动解锁过滤原因。",

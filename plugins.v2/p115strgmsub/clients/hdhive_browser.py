@@ -6,8 +6,10 @@ It uses the public HDHive web pages with Playwright, keeps the same resource
 shape expected by SearchHandler, and leaves all transfer work to the existing
 115 client.
 """
+import json
 import re
 from contextlib import contextmanager
+from pathlib import Path
 from time import time
 from typing import Any, Dict, Iterator, List, Optional
 from urllib.parse import urlparse
@@ -109,16 +111,44 @@ class HDHiveBrowserClient:
         return "; ".join(keep)
 
     def _load_saved_cookie(self) -> str:
-        if self._cookie:
-            return self._cookie
+        candidates = []
+        # P115StrmHelper already maintains a working HDHive cookie in this MP environment.
+        # Prefer it over the plugin's saved/configured cookie because stale configured cookies can still
+        # open the public detail page but hide all resource cards, producing a misleading zero-result search.
+        strmhelper_cookie = self._load_strmhelper_cookie()
+        if strmhelper_cookie:
+            candidates.append(("P115StrmHelper", strmhelper_cookie))
         if self._get_data:
             try:
                 saved = self._get_data(self.COOKIE_DATA_KEY) or ""
                 if saved:
-                    self._cookie = str(saved).strip()
+                    candidates.append(("插件缓存", str(saved).strip()))
             except Exception as e:
                 logger.debug(f"HDHive browser: failed to load saved cookie: {e}")
+        if self._cookie:
+            candidates.append(("配置", self._cookie))
+
+        for source, cookie in candidates:
+            cookie = str(cookie or "").strip()
+            if cookie and "token=" in cookie:
+                self._cookie = cookie
+                logger.info(f"HDHive browser: 使用 {source} Cookie")
+                return self._cookie
         return self._cookie
+
+    @staticmethod
+    def _load_strmhelper_cookie() -> str:
+        """Reuse HDHive cookie saved by P115StrmHelper when P115StrgmSub config cookie is stale/missing."""
+        cookie_file = Path("/config/plugins/p115strmhelper/hdhive_cookies.json")
+        try:
+            if not cookie_file.exists():
+                return ""
+            data = json.loads(cookie_file.read_text(encoding="utf-8"))
+            cookie = str(data.get("cookie_str") or "").strip()
+            return cookie if "token=" in cookie else ""
+        except Exception as e:
+            logger.debug(f"HDHive browser: failed to load P115StrmHelper cookie: {e}")
+            return ""
 
     def _save_cookie(self, cookie: str):
         cookie = (cookie or "").strip()
@@ -150,9 +180,12 @@ class HDHiveBrowserClient:
                     return result
             except HDHiveLoginError as e:
                 last_error = e
-                can_retry_with_password = bool(self._cookie and self._username and self._password)
-                if attempt == 0 and can_retry_with_password:
-                    logger.warning("HDHive browser: Cookie invalid, retrying with username/password")
+                has_password_fallback = bool(self._username and self._password)
+                has_strmhelper_fallback = bool(self._load_strmhelper_cookie())
+                can_retry = bool(self._cookie and (has_password_fallback or has_strmhelper_fallback))
+                if attempt == 0 and can_retry:
+                    fallback = "username/password" if has_password_fallback else "P115StrmHelper Cookie"
+                    logger.warning(f"HDHive browser: Cookie invalid, retrying with {fallback}")
                     self._clear_runtime_cookie()
                     continue
                 raise
