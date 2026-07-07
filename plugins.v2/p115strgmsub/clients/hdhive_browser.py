@@ -641,7 +641,7 @@ class HDHiveBrowserClient:
 
     @staticmethod
     def _extract_115_url(value: str) -> str:
-        match = re.search(r"https?://(?:115cdn|115)\.com/\S+", value or "")
+        match = re.search(r"https?://(?:115cdn|115|anxia)\.com/\S+", value or "")
         return match.group(0).rstrip(" \n\r\t\"'<>") if match else ""
 
     @classmethod
@@ -718,7 +718,7 @@ class HDHiveBrowserClient:
                 if (document.body) push(document.body.innerText);
                 if (document.documentElement) push(document.documentElement.innerHTML);
                 const joined = textParts.join('\n');
-                const match = joined.match(/https?:\/\/(115cdn|115)\.com\/[^\s"'<>]+/);
+                const match = joined.match(/https?:\/\/(115cdn|115|anxia)\.com\/[^\s"'<>]+/);
                 return match ? match[0] : '';
             }
             """
