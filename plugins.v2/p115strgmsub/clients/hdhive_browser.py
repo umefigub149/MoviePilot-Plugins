@@ -310,21 +310,47 @@ class HDHiveBrowserClient:
             return
         if not self._username or not self._password:
             raise HDHiveLoginError("HDHive browser mode needs Cookie or username/password")
+
         page = context.new_page()
-        page.goto(f"{self.BASE_URL}/login", wait_until="domcontentloaded", timeout=30000)
-        page.wait_for_timeout(1000)
+        self._goto_with_retry(page, f"{self.BASE_URL}/login", "打开登录页", attempts=3, timeout=30000)
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=15000)
+        except Exception:
+            pass
+        page.wait_for_timeout(2000)
+
+        if not self._wait_for_any_input(page, timeout_seconds=18):
+            try:
+                logger.info("HDHive browser: 登录页尚未出现输入框，刷新后重试")
+                self._goto_with_retry(page, f"{self.BASE_URL}/login", "刷新登录页", attempts=2, timeout=30000)
+                page.wait_for_timeout(3000)
+            except Exception:
+                pass
+
         username_selectors = [
             "input[name='username']",
             "input[name='email']",
             "input[type='email']",
+            "input[type='text']",
             "#username",
+            "#email",
         ]
         password_selectors = ["input[name='password']", "input[type='password']", "#password"]
         if not self._fill_first(page, username_selectors, self._username):
-            raise HDHiveLoginError("HDHive login page username field was not found")
+            body = ""
+            try:
+                body = page.locator("body").inner_text(timeout=3000)[:160]
+            except Exception:
+                pass
+            raise HDHiveLoginError(f"HDHive login page username field was not found; url={page.url}; body={body}")
         if not self._fill_first(page, password_selectors, self._password):
-            raise HDHiveLoginError("HDHive login page password field was not found")
-        button = page.locator("button[type='submit'], button:has-text('登录'), button:has-text('Login')")
+            body = ""
+            try:
+                body = page.locator("body").inner_text(timeout=3000)[:160]
+            except Exception:
+                pass
+            raise HDHiveLoginError(f"HDHive login page password field was not found; url={page.url}; body={body}")
+        button = page.locator("button[type='submit'], button:has-text('登录'), button:has-text('Login'), [role='button']:has-text('登录')")
         if button.count():
             button.first.click()
         else:
@@ -333,10 +359,20 @@ class HDHiveBrowserClient:
             page.wait_for_load_state("domcontentloaded", timeout=15000)
         except PlaywrightTimeoutError:
             pass
+        try:
+            page.wait_for_load_state("networkidle", timeout=10000)
+        except Exception:
+            pass
         page.wait_for_timeout(3000)
         self._refresh_cookie_from_context(context)
         if not self._cookie:
-            raise HDHiveLoginError("HDHive login did not return a token cookie")
+            body = ""
+            try:
+                body = page.locator("body").inner_text(timeout=3000)[:180]
+            except Exception:
+                pass
+            raise HDHiveLoginError(f"HDHive login did not return a token cookie; url={page.url}; body={body}")
+        logger.info("HDHive browser: 账号密码登录成功，已刷新 Cookie")
 
     @staticmethod
     def _fill_first(page: Any, selectors: List[str], value: str) -> bool:
@@ -349,6 +385,49 @@ class HDHiveBrowserClient:
             except Exception:
                 continue
         return False
+
+    @staticmethod
+    def _wait_for_any_input(page: Any, timeout_seconds: int = 20) -> bool:
+        deadline = time() + max(timeout_seconds, 1)
+        while time() < deadline:
+            try:
+                if page.locator("input").count() > 0:
+                    return True
+            except Exception:
+                pass
+            try:
+                page.wait_for_timeout(500)
+            except Exception:
+                pass
+        return False
+
+    def _goto_with_retry(self, page: Any, url: str, reason: str, attempts: int = 3, timeout: int = 30000) -> None:
+        last_error = ""
+        for attempt in range(1, max(attempts, 1) + 1):
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+                return
+            except Exception as e:
+                last_error = str(e)
+                transient = (
+                    "ERR_NETWORK_CHANGED" in last_error
+                    or "ERR_CONNECTION" in last_error
+                    or "ERR_TIMED_OUT" in last_error
+                    or "Timeout" in last_error
+                    or "Navigation" in last_error
+                    or "navigation" in last_error.lower()
+                )
+                if not transient or attempt >= max(attempts, 1):
+                    logger.error(f"HDHive (Browser) 打开页面失败：{reason}，尝试={attempt}/{attempts}，错误={last_error}")
+                    raise
+                wait_ms = 1000 * attempt
+                logger.warning(f"HDHive (Browser) 打开页面失败，将重试：{reason}，尝试={attempt}/{attempts}，错误={last_error}")
+                try:
+                    page.wait_for_timeout(wait_ms)
+                except Exception:
+                    pass
+        if last_error:
+            raise HDHiveBrowserError(last_error)
 
     @staticmethod
     def _slug_from_resource(resource: Dict[str, Any]) -> str:
@@ -533,7 +612,7 @@ class HDHiveBrowserClient:
 
             page.on("response", on_response)
             logger.info(f"HDHive (Browser) 访问资源页: {detail_url}")
-            page.goto(detail_url, wait_until="domcontentloaded", timeout=30000)
+            self._goto_with_retry(page, detail_url, "打开TMDB资源页", attempts=3, timeout=30000)
             page.wait_for_timeout(1500)
             logger.info(f"HDHive (Browser) 当前页面: {page.url}")
             if "/login" in page.url:
@@ -787,7 +866,7 @@ class HDHiveBrowserClient:
 
             def goto_resource(reason: str) -> None:
                 logger.info(f"HDHive (Browser) 打开资源详情：{slug}（{reason}）")
-                page.goto(resource_url, wait_until="domcontentloaded", timeout=30000)
+                self._goto_with_retry(page, resource_url, reason, attempts=3, timeout=30000)
                 wait_page_stable(reason, timeout_ms=12000)
                 if self._page_is_login(page):
                     raise HDHiveLoginError("HDHive cookie was redirected to login page")

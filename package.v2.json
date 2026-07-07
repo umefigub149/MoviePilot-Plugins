@@ -23,11 +23,12 @@
     "release": true,
     "description": "结合MoviePilot订阅功能，自动搜索115网盘资源并转存缺失剧集。",
     "labels": "订阅,115网盘",
-    "version": "1.6.2",
+    "version": "1.6.3",
     "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/cloud.png",
     "author": "umefigub149",
     "level": 1,
     "history": {
+      "v1.6.3": "增强 HDHive 浏览器模式一体化稳定性：打开资源页遇到 net::ERR_NETWORK_CHANGED/超时/导航异常会自动重试；账号密码登录会等待登录页输入框、刷新重试并校验 Cookie，减少旧 Cookie 失效或登录页慢加载导致的失败。",
       "v1.6.2": "修复 HDHive 页面返回 anxia.com 分享链接时插件误判为未获取到115链接的问题；浏览器模式现在同时识别 115cdn.com、115.com 和 anxia.com 分享链接。",
       "v1.6.1": "修复 HDHive 浏览器模式 Cookie 失效后重试仍反复使用 P115StrmHelper 旧 Cookie 的问题：检测到登录页重定向后，下一轮强制跳过外部/缓存/配置 Cookie，改用账号密码重新登录并刷新 Cookie。",
       "v1.6.0": "增强 HDHive 浏览器模式获取115链接稳定性：资源详情页跳转或刷新时会等待页面稳定并多轮重试，递归捕获接口/页面里的115链接，免费资源也会尝试“获取/查看/复制链接”等按钮，日志区分页面跳转重试与最终未暴露115链接。",
