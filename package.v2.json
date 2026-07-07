@@ -23,11 +23,12 @@
     "release": true,
     "description": "结合MoviePilot订阅功能，自动搜索115网盘资源并转存缺失剧集。",
     "labels": "订阅,115网盘",
-    "version": "1.5.8",
+    "version": "1.5.9",
     "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/cloud.png",
     "author": "umefigub149",
     "level": 1,
     "history": {
+      "v1.5.9": "新增“MP新增订阅后自动搜索115资源”：监听 MoviePilot 的 SubscribeAdded 事件，在原有新增订阅站点兜底后，后台等待指定秒数，只搜索这个新增订阅并复用原有单订阅搜索/转存逻辑；不重新搜索全部旧订阅，仅防止正在等待/正在搜索的重复排队。",
       "v1.5.8": "1. 修复 HDHive 浏览器模式（无需 OpenAPI）收费资源解锁时页面跳转导致 Execution context was destroyed 的问题：提取 115 链接时容忍导航重建并重试，已在 MP 容器内用 /resource/115/ 实测返回 115cdn 分享链接。2. 保留 P115StrmHelper Cookie 兜底与 DOM 资源卡片解析。",
       "v1.5.7": "1. 修复 HDHive 浏览器模式（无需 OpenAPI）配置 Cookie 过期但仍可打开公开详情页时资源卡片为空的问题：优先复用 P115StrmHelper 已维护的 HDHive Cookie，再回退插件缓存和配置 Cookie。2. 验证旧配置 stale token 下可重新解析出 /resource/115/ 资源卡片。",
       "v1.5.6": "1. 修复 HDHive 浏览器模式（无需 OpenAPI）在 MUI 页面中 115 标签已默认选中但无法被点击确认时返回 0 资源的问题：点击后立即进行 DOM 预解析，并改用 DDSRem 风格的最小资源卡片解析，能识别 /resource/115/ 链接、发布时间、积分、体积和分辨率。2. 增加验证脚本覆盖 DOM 预解析逻辑。",

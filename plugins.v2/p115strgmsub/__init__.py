@@ -4,8 +4,8 @@
 """
 import datetime
 from pathlib import Path
-from threading import Lock
-from typing import Optional, Any, List, Dict, Tuple
+from threading import Lock, Thread
+from typing import Optional, Any, List, Dict, Tuple, Set
 
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -39,7 +39,7 @@ class P115StrgmSub(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "1.5.8"
+    plugin_version = "1.5.9"
     # 插件作者
     plugin_author = "umefigub149"
     # 作者主页
@@ -113,6 +113,13 @@ class P115StrgmSub(_PluginBase):
     _unblock_site_names: List[str] = []
     _unblock_delay_minutes: int = 5          # -1 禁用触发条件1（并视为禁用窗口）
     _system_subscribe_window_hours: float = 1.0  # 0 禁用窗口
+
+    # 新增订阅自动搜索：只防正在等待/运行的重复排队，不永久限制同一订阅
+    _auto_search_new_subscribe: bool = False
+    _auto_search_new_subscribe_delay_seconds: int = 60
+    _new_subscribe_search_lock: Lock = Lock()
+    _new_subscribe_pending: Set[int] = set()
+    _new_subscribe_running: Set[int] = set()
 
     # 运行时对象
     _pansou_client: Optional[PanSouClient] = None
@@ -512,6 +519,138 @@ class P115StrgmSub(_PluginBase):
         except Exception as e:
             logger.error(f"SubscribeAdded 兜底失败：{e}")
 
+        self._schedule_new_subscribe_auto_search(sid=sid, event=event)
+
+    def _schedule_new_subscribe_auto_search(self, sid: int, event: Event = None) -> None:
+        """收到 MP 新增订阅事件后，后台延迟搜索这个新增订阅。"""
+        if not self._auto_search_new_subscribe:
+            logger.debug(f"新增订阅自动搜索未开启，跳过（subscribe_id={sid}）")
+            return
+        if not self._enabled:
+            logger.info(f"新增订阅自动搜索跳过：插件未启用（subscribe_id={sid}）")
+            return
+        if self._is_subscribe_excluded(sid):
+            logger.info(f"新增订阅自动搜索跳过：订阅不在本插件处理范围（subscribe_id={sid}）")
+            return
+
+        with self._new_subscribe_search_lock:
+            if sid in self._new_subscribe_pending:
+                logger.info(f"新增订阅自动搜索跳过：订阅ID={sid} 已在等待搜索，避免重复排队")
+                return
+            if sid in self._new_subscribe_running:
+                logger.info(f"新增订阅自动搜索跳过：订阅ID={sid} 正在搜索中，避免重复执行")
+                return
+            self._new_subscribe_pending.add(sid)
+
+        title = None
+        media_type = None
+        try:
+            data = (event.event_data or {}) if event else {}
+            mediainfo = data.get("mediainfo") or {}
+            if isinstance(mediainfo, dict):
+                title = mediainfo.get("title") or mediainfo.get("name")
+                media_type = mediainfo.get("type")
+        except Exception:
+            pass
+        logger.info(
+            f"检测到 MP 新增订阅：订阅ID={sid}，标题={title or '未知'}，类型={media_type or '未知'}；"
+            f"已安排 {self._auto_search_new_subscribe_delay_seconds} 秒后自动搜索115资源"
+        )
+
+        thread = Thread(
+            target=self._delayed_search_new_subscribe,
+            args=(sid,),
+            name=f"p115-new-subscribe-search-{sid}",
+            daemon=True,
+        )
+        thread.start()
+
+    def _delayed_search_new_subscribe(self, sid: int) -> None:
+        delay = max(int(self._auto_search_new_subscribe_delay_seconds or 0), 0)
+        if delay > 0:
+            logger.info(f"新增订阅自动搜索等待中：订阅ID={sid}，等待={delay}秒")
+            import time
+            time.sleep(delay)
+
+        with self._new_subscribe_search_lock:
+            self._new_subscribe_pending.discard(sid)
+            if sid in self._new_subscribe_running:
+                logger.info(f"新增订阅自动搜索跳过：订阅ID={sid} 已经在搜索中")
+                return
+            self._new_subscribe_running.add(sid)
+        try:
+            self._search_new_subscribe_now(sid)
+        except Exception as e:
+            logger.error(f"新增订阅自动搜索失败：订阅ID={sid}，错误={e}", exc_info=True)
+        finally:
+            with self._new_subscribe_search_lock:
+                self._new_subscribe_running.discard(sid)
+
+    def _search_new_subscribe_now(self, sid: int) -> bool:
+        """只搜索一个新增订阅，复用原有单订阅处理函数，不跑全量同步。"""
+        if not self._enabled:
+            logger.info(f"新增订阅自动搜索停止：插件已关闭（subscribe_id={sid}）")
+            return False
+        if not self._pansou_enabled and not self._nullbr_enabled and not self._hdhive_enabled:
+            logger.error(f"新增订阅自动搜索失败：搜索源均未启用（subscribe_id={sid}）")
+            return False
+        if not self._p115_manager:
+            logger.error(f"新增订阅自动搜索失败：115 客户端未初始化（subscribe_id={sid}）")
+            return False
+        if not self._p115_manager.check_login():
+            logger.error(f"新增订阅自动搜索失败：115 登录失败，Cookie 可能已过期（subscribe_id={sid}）")
+            return False
+
+        self._init_handlers()
+        with SessionFactory() as db:
+            subscribe = SubscribeOper(db=db).get(sid)
+
+        if not subscribe:
+            logger.warning(f"新增订阅自动搜索停止：订阅不存在或已删除（subscribe_id={sid}）")
+            return False
+        if self._is_subscribe_excluded(subscribe.id):
+            logger.info(f"新增订阅自动搜索跳过：订阅不在本插件处理范围（subscribe_id={subscribe.id}，标题={subscribe.name}）")
+            return False
+
+        logger.info(
+            f"开始搜索新增订阅：订阅ID={subscribe.id}，标题={subscribe.name}，年份={subscribe.year}，"
+            f"类型={subscribe.type}，季={subscribe.season or 1}，缺失集数={getattr(subscribe, 'lack_episode', None)}"
+        )
+
+        history: List[dict] = self.get_data('history') or []
+        transfer_details: List[Dict[str, Any]] = []
+        transferred_count = 0
+        before_count = transferred_count
+
+        if subscribe.type == MediaType.MOVIE.value:
+            transferred_count = self._sync_handler.process_movie_subscribe(
+                subscribe=subscribe,
+                history=history,
+                transfer_details=transfer_details,
+                transferred_count=transferred_count,
+            )
+        elif subscribe.type == MediaType.TV.value:
+            transferred_count = self._sync_handler.process_tv_subscribe(
+                subscribe=subscribe,
+                history=history,
+                transfer_details=transfer_details,
+                transferred_count=transferred_count,
+                exclude_ids=set(self._exclude_subscribes or []),
+            )
+        else:
+            logger.info(f"新增订阅自动搜索跳过：暂不支持的订阅类型 {subscribe.type}（subscribe_id={subscribe.id}）")
+            return False
+
+        self.save_data('history', history)
+        delta = transferred_count - before_count
+        if delta > 0:
+            logger.info(f"新增订阅自动搜索完成：订阅ID={subscribe.id}，标题={subscribe.name}，新增转存数量={delta}")
+            if self._notify and transfer_details:
+                self._sync_handler.send_transfer_notification(transfer_details, transferred_count)
+        else:
+            logger.info(f"新增订阅自动搜索完成：订阅ID={subscribe.id}，标题={subscribe.name}，本次未找到可转存资源")
+        return True
+
     @eventmanager.register(EventType.SubscribeModified)
     def on_subscribe_modified(self, event: Event):
         """
@@ -613,6 +752,11 @@ class P115StrgmSub(_PluginBase):
             )
 
             self._block_system_subscribe = bool(config.get("block_system_subscribe", False))
+            self._auto_search_new_subscribe = bool(config.get("auto_search_new_subscribe", False))
+            try:
+                self._auto_search_new_subscribe_delay_seconds = max(0, int(config.get("auto_search_new_subscribe_delay_seconds", 60) or 0))
+            except Exception:
+                self._auto_search_new_subscribe_delay_seconds = 60
 
         # 初始化客户端/handlers
         self._init_clients()
@@ -861,6 +1005,8 @@ class P115StrgmSub(_PluginBase):
             "exclude_subscribes": self._exclude_subscribes,
             "include_subscribes": self._include_subscribes,
             "block_system_subscribe": self._block_system_subscribe,
+            "auto_search_new_subscribe": self._auto_search_new_subscribe,
+            "auto_search_new_subscribe_delay_seconds": self._auto_search_new_subscribe_delay_seconds,
             "max_transfer_per_sync": self._max_transfer_per_sync,
             "batch_size": self._batch_size,
             "skip_other_season_dirs": self._skip_other_season_dirs,

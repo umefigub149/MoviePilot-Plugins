@@ -115,6 +115,47 @@ class UIConfig:
                         ]
                     },
 
+                    # 新增订阅自动搜索
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 4},
+                                'content': [{'component': 'VSwitch', 'props': {'model': 'auto_search_new_subscribe', 'label': 'MP新增订阅后自动搜索115资源'}}]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 4},
+                                'content': [{
+                                    'component': 'VTextField',
+                                    'props': {
+                                        'model': 'auto_search_new_subscribe_delay_seconds',
+                                        'label': '新增订阅后等待几秒再搜索',
+                                        'type': 'number',
+                                        'placeholder': '60',
+                                        'hint': '建议60秒。MP刚新增订阅时，订阅信息和缺失集数可能需要一点时间才完整。',
+                                        'persistent-hint': True,
+                                        'clearable': True
+                                    }
+                                }]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 4},
+                                'content': [{
+                                    'component': 'VAlert',
+                                    'props': {
+                                        'type': 'info',
+                                        'variant': 'tonal',
+                                        'density': 'compact',
+                                        'text': '只搜索刚新增的订阅，不会重新搜索全部旧订阅；同一订阅正在等待或搜索时会避免重复排队。'
+                                    }
+                                }]
+                            }
+                        ]
+                    },
+
                     # 取消屏蔽后的站点选择/窗口期/延迟分钟（1.2.4 语义同步）
                     {
                         'component': 'VRow',
@@ -430,6 +471,8 @@ class UIConfig:
             "unblock_window_hours": 1,
             "system_subscribe_window_hours": 1,
             "unblock_delay_minutes": 5,
+            "auto_search_new_subscribe": False,
+            "auto_search_new_subscribe_delay_seconds": 60,
 
             "save_path": "/我的接收/MoviePilot/TV",
             "movie_save_path": "/我的接收/MoviePilot/Movie",
