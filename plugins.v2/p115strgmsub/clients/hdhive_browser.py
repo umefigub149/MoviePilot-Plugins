@@ -61,6 +61,7 @@ class HDHiveBrowserClient:
         self._get_data = get_data_func
         self._save_data = save_data_func
         self._headless = headless
+        self._skip_external_cookie_once = False
 
     @property
     def is_ready(self) -> bool:
@@ -115,17 +116,22 @@ class HDHiveBrowserClient:
         # P115StrmHelper already maintains a working HDHive cookie in this MP environment.
         # Prefer it over the plugin's saved/configured cookie because stale configured cookies can still
         # open the public detail page but hide all resource cards, producing a misleading zero-result search.
-        strmhelper_cookie = self._load_strmhelper_cookie()
-        if strmhelper_cookie:
-            candidates.append(("P115StrmHelper", strmhelper_cookie))
-        if self._get_data:
+        skip_external_cookie = bool(getattr(self, "_skip_external_cookie_once", False))
+        if skip_external_cookie:
+            logger.info("HDHive browser: 上次 Cookie 已失效，本轮跳过 P115StrmHelper/缓存/配置 Cookie，改用账号密码重新登录")
+            self._skip_external_cookie_once = False
+        else:
+            strmhelper_cookie = self._load_strmhelper_cookie()
+            if strmhelper_cookie:
+                candidates.append(("P115StrmHelper", strmhelper_cookie))
+        if self._get_data and not skip_external_cookie:
             try:
                 saved = self._get_data(self.COOKIE_DATA_KEY) or ""
                 if saved:
                     candidates.append(("插件缓存", str(saved).strip()))
             except Exception as e:
                 logger.debug(f"HDHive browser: failed to load saved cookie: {e}")
-        if self._cookie:
+        if self._cookie and not skip_external_cookie:
             candidates.append(("配置", self._cookie))
 
         for source, cookie in candidates:
@@ -184,9 +190,11 @@ class HDHiveBrowserClient:
                 has_strmhelper_fallback = bool(self._load_strmhelper_cookie())
                 can_retry = bool(self._cookie and (has_password_fallback or has_strmhelper_fallback))
                 if attempt == 0 and can_retry:
-                    fallback = "username/password" if has_password_fallback else "P115StrmHelper Cookie"
+                    fallback = "账号密码重新登录" if has_password_fallback else "P115StrmHelper Cookie"
                     logger.warning(f"HDHive browser: Cookie invalid, retrying with {fallback}")
                     self._clear_runtime_cookie()
+                    if has_password_fallback:
+                        self._skip_external_cookie_once = True
                     continue
                 raise
         if last_error:
