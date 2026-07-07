@@ -39,7 +39,7 @@ class P115FollowTransfer(_PluginBase):
     plugin_name = "联动115追更"
     plugin_desc = "检测115追更/STRM助手成功转存后，稍等一会儿把指定目录交给MoviePilot整理"
     plugin_icon = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/cloud.png"
-    plugin_version = "1.0.5"
+    plugin_version = "1.0.6"
     plugin_author = "umefigub149"
     author_url = "https://github.com/umefigub149"
     plugin_config_prefix = "p115followtransfer_"
@@ -51,6 +51,7 @@ class P115FollowTransfer(_PluginBase):
     DEFAULT_CRON = "*/5 * * * *"
     DEFAULT_SOURCE_USERNAME = "P115StrgmSub"
     DEFAULT_STORAGE_NAME = "CloudDrive储存"
+    DEFAULT_CLOUDDRIVE_PREFIX = "/115open"
     DEFAULT_FOLLOW_DIRS = "/网盘整理/网盘待整理目录/Movie\n/网盘整理/网盘待整理目录/TV"
     DEFAULT_SHARE_DIRS = "/最近接收\n/网盘整理/分享转存目录"
     DEFAULT_ALLOWED_ROOTS = "/网盘整理\n/最近接收\n/我的接收"
@@ -68,6 +69,7 @@ class P115FollowTransfer(_PluginBase):
     _share_delay_seconds: int = 60
     _share_dirs_text: str = DEFAULT_SHARE_DIRS
     _storage_name: str = DEFAULT_STORAGE_NAME
+    _clouddrive_prefix: str = DEFAULT_CLOUDDRIVE_PREFIX
     _allowed_roots_text: str = DEFAULT_ALLOWED_ROOTS
     _debounce_seconds: int = 300
     _recent_events_limit: int = 50
@@ -100,6 +102,7 @@ class P115FollowTransfer(_PluginBase):
         self._share_delay_seconds = self._safe_int(config.get("share_delay_seconds"), 60)
         self._share_dirs_text = str(config.get("share_dirs") or self.DEFAULT_SHARE_DIRS)
         self._storage_name = str(config.get("storage_name") or self.DEFAULT_STORAGE_NAME).strip() or self.DEFAULT_STORAGE_NAME
+        self._clouddrive_prefix = self._normalize_path(str(config.get("clouddrive_prefix") or self.DEFAULT_CLOUDDRIVE_PREFIX))
         self._allowed_roots_text = str(config.get("allowed_roots") or self.DEFAULT_ALLOWED_ROOTS)
         self._debounce_seconds = self._safe_int(config.get("debounce_seconds"), 300)
         self._recent_events_limit = max(10, min(self._safe_int(config.get("recent_events_limit"), 50), 200))
@@ -235,8 +238,9 @@ class P115FollowTransfer(_PluginBase):
                     {
                         "component": "VRow",
                         "content": [
-                            {"component": "VCol", "props": {"cols": 12, "md": 4}, "content": [{"component": "VCombobox", "props": {"model": "storage_name", "label": "目标存储", "items": [{"title": "CloudDrive2（CloudDrive储存）", "value": "CloudDrive储存"}, {"title": "u115", "value": "u115"}, {"title": "115网盘Plus", "value": "115网盘Plus"}, {"title": "本地存储（local）", "value": "local"}], "placeholder": "CloudDrive储存", "hint": "115内部路径通常选 CloudDrive储存；也可按实际 MP 存储名称选择 u115、115网盘Plus、local 或手动输入。", "persistentHint": True}}]},
-                            {"component": "VCol", "props": {"cols": 12, "md": 4}, "content": [{"component": "VTextField", "props": {"model": "cron", "label": "多久检查一次追更", "placeholder": "*/5 * * * *"}}]},
+                            {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VCombobox", "props": {"model": "storage_name", "label": "目标存储", "items": [{"title": "CloudDrive2（CloudDrive储存）", "value": "CloudDrive储存"}, {"title": "u115", "value": "u115"}, {"title": "115网盘Plus", "value": "115网盘Plus"}, {"title": "本地存储（local）", "value": "local"}], "placeholder": "CloudDrive储存", "hint": "使用 CloudDrive2 通常选 CloudDrive储存。", "persistentHint": True}}]},
+                            {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VTextField", "props": {"model": "clouddrive_prefix", "label": "CloudDrive2路径前缀", "placeholder": "/115open", "hint": "MP里CloudDrive2通常要加 /115open；你填115内部路径时，插件会自动补这个前缀再交给MP。", "persistentHint": True}}]},
+                            {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VTextField", "props": {"model": "cron", "label": "多久检查一次追更", "placeholder": "*/5 * * * *"}}]},
                             {"component": "VCol", "props": {"cols": 12, "md": 4}, "content": [{"component": "VTextField", "props": {"model": "source_username", "label": "追更记录来源", "placeholder": "P115StrgmSub"}}]},
                         ],
                     },
@@ -280,6 +284,7 @@ class P115FollowTransfer(_PluginBase):
             "share_delay_seconds": 60,
             "share_dirs": self.DEFAULT_SHARE_DIRS,
             "storage_name": self.DEFAULT_STORAGE_NAME,
+            "clouddrive_prefix": self.DEFAULT_CLOUDDRIVE_PREFIX,
             "allowed_roots": self.DEFAULT_ALLOWED_ROOTS,
             "debounce_seconds": 300,
             "recent_events_limit": 50,
@@ -609,28 +614,34 @@ class P115FollowTransfer(_PluginBase):
 
     def _build_file_item(self, normalized_path: str) -> Optional[FileItem]:
         storage_name = self._storage_name.strip() or self.DEFAULT_STORAGE_NAME
-        path_obj = Path(normalized_path)
+        candidate_paths = self._candidate_storage_paths(normalized_path)
         storagechain = self._storagechain or StorageChain()
-        logger.info("【联动115追更】正在解析目录：目标存储=%s，目录=%s", storage_name, normalized_path)
-        try:
-            file_item = storagechain.get_file_item(storage=storage_name, path=path_obj)
-            if file_item:
-                logger.info("【联动115追更】StorageChain 解析目录成功：storage=%s，path=%s，fileid=%s", getattr(file_item, "storage", None), getattr(file_item, "path", None), getattr(file_item, "fileid", None))
-                return file_item
-        except Exception as err:
-            logger.debug("【联动115追更】StorageChain.get_file_item 失败: storage=%s path=%s err=%s", storage_name, normalized_path, err)
+        last_path = normalized_path
+
+        for candidate in candidate_paths:
+            last_path = candidate
+            path_obj = Path(candidate)
+            logger.info("【联动115追更】正在解析目录：目标存储=%s，用户填写目录=%s，实际尝试目录=%s", storage_name, normalized_path, candidate)
+            try:
+                file_item = storagechain.get_file_item(storage=storage_name, path=path_obj)
+                if file_item:
+                    logger.info("【联动115追更】StorageChain 解析目录成功：storage=%s，path=%s，fileid=%s", getattr(file_item, "storage", None), getattr(file_item, "path", None), getattr(file_item, "fileid", None))
+                    return file_item
+            except Exception as err:
+                logger.debug("【联动115追更】StorageChain.get_file_item 失败: storage=%s path=%s err=%s", storage_name, candidate, err)
 
         if storage_name != "local":
-            name = path_obj.name or normalized_path.strip("/") or normalized_path
-            logger.info("【联动115追更】StorageChain 没有返回目录信息，改用固定目录方式交给 MP：storage=%s，path=%s", storage_name, normalized_path)
+            name = Path(last_path).name or last_path.strip("/") or last_path
+            logger.info("【联动115追更】StorageChain 没有返回目录信息，改用固定目录方式交给 MP：storage=%s，用户填写目录=%s，实际交给MP目录=%s", storage_name, normalized_path, last_path)
             return FileItem(
                 storage=storage_name,
                 type="dir",
-                path=normalized_path,
+                path=last_path,
                 name=name,
                 basename=name,
             )
 
+        path_obj = Path(normalized_path)
         if not path_obj.exists():
             return None
         stat_result = path_obj.stat()
@@ -654,25 +665,20 @@ class P115FollowTransfer(_PluginBase):
             modify_time=stat_result.st_mtime,
         )
 
-    def _test_paths(self, dirs: List[str], reason: str) -> List[Dict[str, Any]]:
-        results = []
-        for path in self._dedupe_paths(dirs):
-            allowed = self._is_allowed_path(path)
-            item = self._build_file_item(path) if allowed else None
-            message = "可解析，演练通过" if item else self._path_help_message(self._storage_name, path)
-            if not allowed:
-                message = "路径不在允许入队路径前缀内，请检查允许入队路径前缀配置"
-            results.append({
-                "path": path,
-                "storage": self._storage_name,
-                "allowed": allowed,
-                "resolvable": bool(item),
-                "message": message,
-            })
-            self._record_event("DRYRUN" if item and allowed else "ERROR", path, f"{reason}: {message}")
-        if not results:
-            self._record_event("SKIP", "-", f"{reason}: 未配置目录")
-        return results
+    def _candidate_storage_paths(self, normalized_path: str) -> List[str]:
+        paths = [normalized_path]
+        if self._storage_name == self.DEFAULT_STORAGE_NAME and self._clouddrive_prefix and self._clouddrive_prefix != "/":
+            prefix = self._clouddrive_prefix.rstrip("/")
+            if not normalized_path == prefix and not normalized_path.startswith(prefix + "/"):
+                paths.append(prefix + normalized_path)
+        result = []
+        seen = set()
+        for path in paths:
+            item = self._normalize_path(path)
+            if item and item not in seen:
+                seen.add(item)
+                result.append(item)
+        return result
 
     @staticmethod
     def _path_help_message(storage_name: str, path: str) -> str:
@@ -681,15 +687,8 @@ class P115FollowTransfer(_PluginBase):
             "1. 对应的 MP 存储插件是否已经启用；"
             "2. 目标存储名称是否填对，例如 CloudDrive储存、u115、115网盘Plus；"
             "3. 目录路径是否是这个存储里能看到的路径；"
-            "4. 如果你用的是 CloudDrive2，通常目标存储填 CloudDrive储存。"
+            "4. 如果你用的是 CloudDrive2，通常目标存储填 CloudDrive储存，路径前缀填 /115open。"
         )
-
-    def _set_hook_status(self, status: str, message: str) -> None:
-        with self._runtime_lock:
-            state = self._load_runtime_state()
-            state["share_hook_status"] = status
-            state["share_hook_message"] = message
-            self.save_data(self.RUNTIME_STATE_KEY, state)
 
     def _get_latest_history_id(self) -> int:
         with SessionFactory() as db:
@@ -729,6 +728,7 @@ class P115FollowTransfer(_PluginBase):
             "share_hook_status": state.get("share_hook_status", "未安装"),
             "share_hook_message": state.get("share_hook_message", "无"),
             "storage_name": self._storage_name,
+            "clouddrive_prefix": self._clouddrive_prefix,
             "last_seen_id": state.get("last_seen_id", 0),
             "cursor_initialized": bool(state.get("cursor_initialized", False)),
             "stats": state.get("stats", {}),
@@ -866,6 +866,8 @@ class P115FollowTransfer(_PluginBase):
             "share_delay_seconds": self._share_delay_seconds,
             "share_dirs": self._share_dirs_text,
             "storage_name": self._storage_name,
+            "clouddrive_prefix": self._clouddrive_prefix,
+            "clouddrive_prefix": self._clouddrive_prefix,
             "allowed_roots": self._allowed_roots_text,
             "debounce_seconds": self._debounce_seconds,
             "recent_events_limit": self._recent_events_limit,
