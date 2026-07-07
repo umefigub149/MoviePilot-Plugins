@@ -26,6 +26,7 @@ class SearchHandler:
         hdhive_username: str = "",
         hdhive_password: str = "",
         hdhive_cookie: str = "",
+        hdhive_force_password_login: bool = False,
         hdhive_query_mode: str = "api",
         hdhive_auto_unlock: bool = False,
         hdhive_max_unlock_points: int = 50,
@@ -62,6 +63,7 @@ class SearchHandler:
         self._hdhive_username = hdhive_username
         self._hdhive_password = hdhive_password
         self._hdhive_cookie = hdhive_cookie
+        self._hdhive_force_password_login = bool(hdhive_force_password_login)
         self._hdhive_query_mode = hdhive_query_mode
         self._hdhive_auto_unlock = hdhive_auto_unlock
         self._hdhive_max_unlock_points = hdhive_max_unlock_points
@@ -97,7 +99,9 @@ class SearchHandler:
         # HDHive
         if self._hdhive_enabled:
             if self._hdhive_query_mode == "playwright" and (
-                self._hdhive_cookie or (self._hdhive_username and self._hdhive_password)
+                (self._hdhive_force_password_login and self._hdhive_username and self._hdhive_password)
+                or self._hdhive_cookie
+                or (self._hdhive_username and self._hdhive_password)
             ):
                 available.append("hdhive")
             elif self._hdhive_query_mode == "api" and self._hdhive_client and self._hdhive_client.is_ready:
@@ -339,13 +343,14 @@ class SearchHandler:
         from ..clients import HDHiveBrowserClient
 
         self._hdhive_browser_client = HDHiveBrowserClient(
-            cookie=self._hdhive_cookie,
+            cookie="" if self._hdhive_force_password_login else self._hdhive_cookie,
             username=self._hdhive_username,
             password=self._hdhive_password,
             proxy=settings.PROXY,
             get_data_func=self._get_data_func,
             save_data_func=self._save_data_func,
             headless=True,
+            force_password_login=self._hdhive_force_password_login,
         )
         return self._hdhive_browser_client
 
@@ -354,9 +359,14 @@ class SearchHandler:
         使用 Playwright 浏览器模拟模式查询 HDHive 资源。
         Cookie 优先，账号密码作为 Cookie 缺失时的登录兜底。
         """
-        if not self._hdhive_cookie and not (self._hdhive_username and self._hdhive_password):
+        if self._hdhive_force_password_login and not (self._hdhive_username and self._hdhive_password):
+            logger.warning("HDHive 已开启强制账号密码登录，但未配置用户名或密码")
+            return []
+        if not self._hdhive_force_password_login and not self._hdhive_cookie and not (self._hdhive_username and self._hdhive_password):
             logger.warning("HDHive Playwright 模式需要配置 Cookie 或用户名密码")
             return []
+        if self._hdhive_force_password_login:
+            logger.info("HDHive (Playwright) 已开启强制账号密码登录：不会使用 Cookie/P115StrmHelper Cookie")
 
         try:
             client = self._get_hdhive_browser_client()

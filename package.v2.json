@@ -23,11 +23,12 @@
     "release": true,
     "description": "结合MoviePilot订阅功能，自动搜索115网盘资源并转存缺失剧集。",
     "labels": "订阅,115网盘",
-    "version": "1.6.4",
+    "version": "1.6.5",
     "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/cloud.png",
     "author": "umefigub149",
     "level": 1,
     "history": {
+      "v1.6.5": "新增 HDHive 浏览器模式“强制账号密码登录”开关：开启后每次都用配置的用户名密码登录，不使用 HDHive Cookie、插件缓存 Cookie 或 P115StrmHelper Cookie，适合 Cookie 反复失效/串扰时使用。",
       "v1.6.4": "修复 HDHive 页面提取链接过宽的问题：只接受真正的 /s/ 分享链接，过滤 115 会员页等非分享地址，并截断 password 四位访问码后的页面文字，避免访问码错误。",
       "v1.6.3": "增强 HDHive 浏览器模式一体化稳定性：打开资源页遇到 net::ERR_NETWORK_CHANGED/超时/导航异常会自动重试；账号密码登录会等待登录页输入框、刷新重试并校验 Cookie，减少旧 Cookie 失效或登录页慢加载导致的失败。",
       "v1.6.2": "修复 HDHive 页面返回 anxia.com 分享链接时插件误判为未获取到115链接的问题；浏览器模式现在同时识别 115cdn.com、115.com 和 anxia.com 分享链接。",

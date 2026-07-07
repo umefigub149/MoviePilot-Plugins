@@ -374,11 +374,13 @@ class UIConfig:
                         'component': 'VRow',
                         'content': [
                             {'component': 'VCol', 'props': {'cols': 12},
-                             'content': [{'component': 'VTextarea', 'props': {"clearable": True, 'model': 'hdhive_cookie', 'label': 'HDHive Cookie（浏览器模式推荐）', 'type': 'password', 'placeholder': '从浏览器复制 hdhive.com 登录后的 Cookie；无需 OpenAPI 时优先填写此项', 'rows': 2, 'auto-grow': True, 'hint': 'Cookie 优先；留空时才尝试使用下方用户名/密码兜底登录', 'persistent-hint': True}}]},
+                             'content': [{'component': 'VTextarea', 'props': {"clearable": True, 'model': 'hdhive_cookie', 'label': 'HDHive Cookie（可选）', 'type': 'password', 'placeholder': '从浏览器复制 hdhive.com 登录后的 Cookie；开启强制账号密码登录时会忽略这里', 'rows': 2, 'auto-grow': True, 'hint': '如开启“强制账号密码登录”，插件不会使用这里的 Cookie，也不会使用 STRM助手 Cookie。', 'persistent-hint': True}}]},
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 3},
+                             'content': [{'component': 'VSwitch', 'props': {'model': 'hdhive_force_password_login', 'label': '强制账号密码登录', 'hint': '开启后每次都用下方用户名密码登录，不使用任何Cookie'}}]},
                             {'component': 'VCol', 'props': {'cols': 12, 'md': 4},
-                             'content': [{'component': 'VTextField', 'props': {'model': 'hdhive_username', 'label': 'HDHive 用户名', 'placeholder': '浏览器模式兜底登录，可留空优先使用 Cookie'}}]},
+                             'content': [{'component': 'VTextField', 'props': {'model': 'hdhive_username', 'label': 'HDHive 用户名', 'placeholder': '强制账号密码登录时必填'}}]},
                             {'component': 'VCol', 'props': {'cols': 12, 'md': 5},
-                             'content': [{'component': 'VTextField', 'props': {"clearable": True, 'model': 'hdhive_password', 'label': 'HDHive 密码', 'type': 'password', 'placeholder': '浏览器模式兜底登录，可留空优先使用 Cookie'}}]}
+                             'content': [{'component': 'VTextField', 'props': {"clearable": True, 'model': 'hdhive_password', 'label': 'HDHive 密码', 'type': 'password', 'placeholder': '强制账号密码登录时必填'}}]}
                         ]
                     },
                     # HDHive 积分配置
@@ -501,6 +503,7 @@ class UIConfig:
             "hdhive_username": "",
             "hdhive_password": "",
             "hdhive_cookie": "",
+            "hdhive_force_password_login": False,
             "hdhive_auto_refresh": True,
             "hdhive_refresh_before": 86400,
             "search_source_order": [],

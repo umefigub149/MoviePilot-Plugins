@@ -53,8 +53,10 @@ class HDHiveBrowserClient:
         get_data_func=None,
         save_data_func=None,
         headless: bool = True,
+        force_password_login: bool = False,
     ):
-        self._cookie = (cookie or "").strip()
+        self._force_password_login = bool(force_password_login)
+        self._cookie = "" if self._force_password_login else (cookie or "").strip()
         self._username = (username or "").strip()
         self._password = password or ""
         self._proxy = proxy
@@ -65,6 +67,8 @@ class HDHiveBrowserClient:
 
     @property
     def is_ready(self) -> bool:
+        if self._force_password_login:
+            return bool(self._username and self._password)
         return bool(self._cookie or self._load_saved_cookie() or (self._username and self._password))
 
     @staticmethod
@@ -112,6 +116,10 @@ class HDHiveBrowserClient:
         return "; ".join(keep)
 
     def _load_saved_cookie(self) -> str:
+        if self._force_password_login:
+            logger.info("HDHive browser: 已开启强制账号密码登录，本轮不使用任何 Cookie")
+            self._cookie = ""
+            return ""
         candidates = []
         # P115StrmHelper already maintains a working HDHive cookie in this MP environment.
         # Prefer it over the plugin's saved/configured cookie because stale configured cookies can still

@@ -39,7 +39,7 @@ class P115StrgmSub(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "1.6.4"
+    plugin_version = "1.6.5"
     # 插件作者
     plugin_author = "umefigub149"
     # 作者主页
@@ -85,6 +85,7 @@ class P115StrgmSub(_PluginBase):
     _hdhive_username: str = ""
     _hdhive_password: str = ""
     _hdhive_cookie: str = ""
+    _hdhive_force_password_login: bool = False
     _hdhive_auto_refresh: bool = False
     _hdhive_refresh_before: int = 86400
     _hdhive_query_mode: str = "playwright"
@@ -723,6 +724,7 @@ class P115StrgmSub(_PluginBase):
             self._hdhive_username = config.get("hdhive_username", "")
             self._hdhive_password = config.get("hdhive_password", "")
             self._hdhive_cookie = config.get("hdhive_cookie", "")
+            self._hdhive_force_password_login = bool(config.get("hdhive_force_password_login", False))
             self._hdhive_auto_refresh = config.get("hdhive_auto_refresh", False)
             self._hdhive_refresh_before = int(config.get("hdhive_refresh_before", 86400) or 86400)
             self._max_transfer_per_sync = int(config.get("max_transfer_per_sync", 50) or 50)
@@ -828,7 +830,9 @@ class P115StrgmSub(_PluginBase):
         else:
             self._hdhive_client = None
         if self._hdhive_enabled:
-            if self._hdhive_query_mode == "playwright" and not (
+            if self._hdhive_query_mode == "playwright" and self._hdhive_force_password_login and not (self._hdhive_username and self._hdhive_password):
+                logger.warning("HDHive (Playwright 模式) 已开启强制账号密码登录，但未配置用户名或密码，将无法使用 HDHive 查询功能")
+            elif self._hdhive_query_mode == "playwright" and not (
                     self._hdhive_cookie or (self._hdhive_username and self._hdhive_password)):
                 logger.warning("HDHive (Playwright 模式) 已启用但未配置 Cookie 或用户名密码，将无法使用 HDHive 查询功能")
             elif self._hdhive_query_mode == "api" and (not self._hdhive_client or not self._hdhive_client.is_ready):
@@ -928,6 +932,7 @@ class P115StrgmSub(_PluginBase):
             hdhive_username=self._hdhive_username,
             hdhive_password=self._hdhive_password,
             hdhive_cookie=self._hdhive_cookie,
+            hdhive_force_password_login=self._hdhive_force_password_login,
             only_115=self._only_115,
             pansou_channels=self._pansou_channels,
             search_source_order=self._search_source_order
@@ -997,6 +1002,7 @@ class P115StrgmSub(_PluginBase):
             "hdhive_username": self._hdhive_username,
             "hdhive_password": self._hdhive_password,
             "hdhive_cookie": self._hdhive_cookie,
+            "hdhive_force_password_login": self._hdhive_force_password_login,
             "hdhive_auto_refresh": self._hdhive_auto_refresh,
             "hdhive_refresh_before": self._hdhive_refresh_before,
             # 其他配置
