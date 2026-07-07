@@ -39,7 +39,7 @@ class P115FollowTransfer(_PluginBase):
     plugin_name = "联动115追更"
     plugin_desc = "检测115追更/STRM助手成功转存后，稍等一会儿把指定目录交给MoviePilot整理"
     plugin_icon = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/cloud.png"
-    plugin_version = "1.0.4"
+    plugin_version = "1.0.5"
     plugin_author = "umefigub149"
     author_url = "https://github.com/umefigub149"
     plugin_config_prefix = "p115followtransfer_"
@@ -595,9 +595,12 @@ class P115FollowTransfer(_PluginBase):
             if not file_item:
                 self._record_event("ERROR", normalized_path, self._path_help_message(self._storage_name, normalized_path))
                 return False, False
+            logger.info("【联动115追更】目录解析成功：storage=%s，path=%s，type=%s，name=%s，fileid=%s", getattr(file_item, "storage", None), getattr(file_item, "path", None), getattr(file_item, "type", None), getattr(file_item, "name", None), getattr(file_item, "fileid", None))
             transferchain = self._transferchain or TransferChain()
+            logger.info("【联动115追更】开始交给 MoviePilot 整理：storage=%s，path=%s", file_item.storage, file_item.path)
             transferchain.do_transfer(fileitem=file_item, background=True, manual=True)
-            self._record_event("ENQUEUE", normalized_path, f"已加入整理队列 storage={file_item.storage}: {reason}")
+            logger.info("【联动115追更】已成功交给 MoviePilot 整理：storage=%s，path=%s", file_item.storage, file_item.path)
+            self._record_event("ENQUEUE", normalized_path, f"已交给 MoviePilot 整理：目标存储={file_item.storage}，原因={reason}")
             return True, False
         except Exception as err:
             logger.error("【联动115追更】入队失败: %s %s", normalized_path, err, exc_info=True)
