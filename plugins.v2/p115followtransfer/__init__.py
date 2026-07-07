@@ -39,7 +39,7 @@ class P115FollowTransfer(_PluginBase):
     plugin_name = "联动115追更"
     plugin_desc = "检测115追更/STRM助手成功转存后，延迟将指定115目录加入MoviePilot整理队列"
     plugin_icon = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/cloud.png"
-    plugin_version = "1.0.1"
+    plugin_version = "1.0.2"
     plugin_author = "umefigub149"
     author_url = "https://github.com/umefigub149"
     plugin_config_prefix = "p115followtransfer_"
@@ -364,8 +364,9 @@ class P115FollowTransfer(_PluginBase):
         with self._runtime_lock:
             state = self._load_runtime_state()
             state["last_seen_id"] = latest_id
+            state["cursor_initialized"] = True
             self.save_data(self.RUNTIME_STATE_KEY, state)
-        self._record_event("CURSOR", "-", f"追更游标已重置为 {latest_id}")
+        self._record_event("CURSOR", "-", f"追更游标已重置为当前最大记录ID={latest_id}")
         return {"success": True, "last_seen_id": latest_id}
 
     def scan_follow_history(self, reason: str = "定时检测") -> Dict[str, int]:
@@ -378,18 +379,22 @@ class P115FollowTransfer(_PluginBase):
         if latest_id <= 0:
             self._record_event("INFO", "-", "未找到追更来源转存历史")
             return {"seen": 0, "scheduled": 0, "skipped": 0, "errors": 0}
-        if last_seen_id <= 0 and self._first_run_ignore_existing:
+        if self._first_run_ignore_existing and not bool(state.get("cursor_initialized", False)):
             state["last_seen_id"] = latest_id
+            state["cursor_initialized"] = True
             self.save_data(self.RUNTIME_STATE_KEY, state)
-            self._record_event("CURSOR", "-", f"首次启用忽略旧记录，游标设置为 {latest_id}")
+            self._record_event("CURSOR", "-", f"首次启用/升级初始化游标：当前最大记录ID={latest_id}，已忽略旧历史")
             return {"seen": 0, "scheduled": 0, "skipped": 1, "errors": 0}
         ids = self._get_new_history_ids(last_seen_id)
         if not ids:
+            if not bool(state.get("cursor_initialized", False)):
+                state["cursor_initialized"] = True
+                self.save_data(self.RUNTIME_STATE_KEY, state)
             return {"seen": 0, "scheduled": 0, "skipped": 0, "errors": 0}
         scheduled = self._schedule_dirs(
             dirs=self._parse_lines(self._follow_dirs_text),
             delay_seconds=self._follow_delay_seconds,
-            reason=f"{reason}: 检测到 {self._source_username} 新转存记录 {ids[-1]}",
+            reason=f"{reason}: 检测到 {self._source_username} 新增 {len(ids)} 条转存记录，最新记录ID={ids[-1]}",
             source="follow",
             cursor_id=ids[-1],
         )
@@ -538,8 +543,9 @@ class P115FollowTransfer(_PluginBase):
         if cursor_id and result.get("errors", 0) == 0:
             state = self._load_runtime_state()
             state["last_seen_id"] = max(self._safe_int(state.get("last_seen_id"), 0), cursor_id)
+            state["cursor_initialized"] = True
             self.save_data(self.RUNTIME_STATE_KEY, state)
-            self._record_event("CURSOR", "-", f"追更游标推进到 {cursor_id}")
+            self._record_event("CURSOR", "-", f"追更游标推进到记录ID={cursor_id}")
 
     def _enqueue_dirs(self, dirs: List[str], reason: str, source: str, cursor_id: Optional[int]) -> Dict[str, int]:
         enqueued = 0
@@ -693,6 +699,7 @@ class P115FollowTransfer(_PluginBase):
         if not isinstance(state, dict):
             state = {}
         state.setdefault("last_seen_id", 0)
+        state.setdefault("cursor_initialized", False)
         state.setdefault("debounce", {})
         state.setdefault("stats", {})
         return state
@@ -706,6 +713,7 @@ class P115FollowTransfer(_PluginBase):
             "share_hook_message": state.get("share_hook_message", "无"),
             "storage_name": self._storage_name,
             "last_seen_id": state.get("last_seen_id", 0),
+            "cursor_initialized": bool(state.get("cursor_initialized", False)),
             "stats": state.get("stats", {}),
             "follow_dirs": self._parse_lines(self._follow_dirs_text),
             "share_dirs": self._parse_lines(self._share_dirs_text),

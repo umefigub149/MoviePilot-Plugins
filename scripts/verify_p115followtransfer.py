@@ -21,7 +21,7 @@ legacy_manifest = json.loads(LEGACY_MANIFEST.read_text(encoding="utf-8")) if LEG
 assert "class P115FollowTransfer(_PluginBase)" in source
 assert 'plugin_name = "联动115追更"' in source
 assert 'plugin_author = "umefigub149"' in source
-assert 'plugin_version = "1.0.1"' in source
+assert 'plugin_version = "1.0.2"' in source
 assert "def get_command" in source, "_PluginBase abstract get_command must be implemented"
 assert "DownloadHistory" not in source or "downloadhistory" in source
 assert "SELECT id FROM downloadhistory" in source
@@ -34,6 +34,8 @@ assert "StorageChain" in source and "get_file_item" in source
 assert "TransferChain" in source and "do_transfer" in source
 assert "CloudDrive储存" in source
 assert "first_run_ignore_existing" in source
+assert "cursor_initialized" in source and "最新记录ID" in source
+assert "记录ID不是记录条数" in readme
 assert "debounce_seconds" in source
 assert "dry_run" in source
 assert "VCombobox" in source and "115网盘Plus" in source and "u115" in source
@@ -47,10 +49,10 @@ assert '"auth": "bear"' in source or "'auth': 'bear'" in source or "'auth': \"be
 
 plugin = manifest["P115FollowTransfer"]
 assert plugin["name"] == "联动115追更"
-assert plugin["version"] == "1.0.1"
+assert plugin["version"] == "1.0.2"
 assert plugin["author"] == "umefigub149"
 assert plugin.get("release") is False
-assert "v1.0.1" in plugin["history"] and "v1.0.0" in plugin["history"]
+assert "v1.0.2" in plugin["history"] and "v1.0.1" in plugin["history"] and "v1.0.0" in plugin["history"]
 
 for key in ("UID=", "CID=", "SEID=", "KID=", "ghp_", "sk-"):
     for path, text in [(PLUGIN, source), (README, readme)]:
