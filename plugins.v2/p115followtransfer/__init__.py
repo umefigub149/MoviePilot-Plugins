@@ -39,7 +39,7 @@ class P115FollowTransfer(_PluginBase):
     plugin_name = "联动115追更"
     plugin_desc = "检测115追更/STRM助手成功转存后，延迟将指定115目录加入MoviePilot整理队列"
     plugin_icon = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/cloud.png"
-    plugin_version = "1.0.0"
+    plugin_version = "1.0.1"
     plugin_author = "umefigub149"
     author_url = "https://github.com/umefigub149"
     plugin_config_prefix = "p115followtransfer_"
@@ -160,6 +160,20 @@ class P115FollowTransfer(_PluginBase):
                 "summary": "立即入队分享目录",
             },
             {
+                "path": "/test_follow_paths",
+                "endpoint": self.api_test_follow_paths,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "测试追更目录解析",
+            },
+            {
+                "path": "/test_share_paths",
+                "endpoint": self.api_test_share_paths,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "测试分享目录解析",
+            },
+            {
                 "path": "/clear_cache",
                 "endpoint": self.api_clear_cache,
                 "methods": ["POST"],
@@ -215,14 +229,14 @@ class P115FollowTransfer(_PluginBase):
                         "content": [
                             {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VSwitch", "props": {"model": "enabled", "label": "启用插件"}}]},
                             {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VSwitch", "props": {"model": "onlyonce", "label": "立即运行一次"}}]},
-                            {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VSwitch", "props": {"model": "dry_run", "label": "Dry Run"}}]},
+                            {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VSwitch", "props": {"model": "dry_run", "label": "演练模式（只记录日志，不真正入队）"}}]},
                             {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VSwitch", "props": {"model": "first_run_ignore_existing", "label": "首次忽略旧记录"}}]},
                         ],
                     },
                     {
                         "component": "VRow",
                         "content": [
-                            {"component": "VCol", "props": {"cols": 12, "md": 4}, "content": [{"component": "VTextField", "props": {"model": "storage_name", "label": "目标存储", "placeholder": "CloudDrive储存", "hint": "115内部路径通常选 CloudDrive储存；本地挂载路径可填 local。", "persistentHint": True}}]},
+                            {"component": "VCol", "props": {"cols": 12, "md": 4}, "content": [{"component": "VCombobox", "props": {"model": "storage_name", "label": "目标存储", "items": [{"title": "CloudDrive2（CloudDrive储存）", "value": "CloudDrive储存"}, {"title": "u115", "value": "u115"}, {"title": "115网盘Plus", "value": "115网盘Plus"}, {"title": "本地存储（local）", "value": "local"}], "placeholder": "CloudDrive储存", "hint": "115内部路径通常选 CloudDrive储存；也可按实际 MP 存储名称选择 u115、115网盘Plus、local 或手动输入。", "persistentHint": True}}]},
                             {"component": "VCol", "props": {"cols": 12, "md": 4}, "content": [{"component": "VTextField", "props": {"model": "cron", "label": "追更检测周期", "placeholder": "*/5 * * * *"}}]},
                             {"component": "VCol", "props": {"cols": 12, "md": 4}, "content": [{"component": "VTextField", "props": {"model": "source_username", "label": "追更来源用户名", "placeholder": "P115StrgmSub"}}]},
                         ],
@@ -293,7 +307,7 @@ class P115FollowTransfer(_PluginBase):
                 "props": {"type": "info", "variant": "tonal"},
                 "text": (
                     f"状态：{'启用' if self._enabled else '停用'}；"
-                    f"Hook：{'已安装' if self._hooked_helper else '未安装'}；"
+                    f"STRM助手桥接：{state.get('share_hook_status', '未安装')}（{state.get('share_hook_message', '无')}）；"
                     f"追更游标：{state.get('last_seen_id', 0)}；"
                     f"成功入队：{stats.get('enqueue_success', 0)}；失败：{stats.get('enqueue_error', 0)}；跳过：{stats.get('enqueue_skip', 0)}"
                 ),
@@ -330,6 +344,12 @@ class P115FollowTransfer(_PluginBase):
     def api_enqueue_share_roots(self) -> Dict[str, Any]:
         result = self.enqueue_share_dirs_now(reason="API手动入队分享目录")
         return {"success": True, "data": result}
+
+    def api_test_follow_paths(self) -> Dict[str, Any]:
+        return {"success": True, "data": self._test_paths(self._parse_lines(self._follow_dirs_text), "追更目录解析测试")}
+
+    def api_test_share_paths(self) -> Dict[str, Any]:
+        return {"success": True, "data": self._test_paths(self._parse_lines(self._share_dirs_text), "分享目录解析测试")}
 
     def api_clear_cache(self) -> Dict[str, Any]:
         with self._runtime_lock:
@@ -383,23 +403,29 @@ class P115FollowTransfer(_PluginBase):
 
     def _install_share_hook(self) -> None:
         if not self._enabled or not self._share_hook_enabled:
+            self._set_hook_status("未启用桥接", "插件未启用或 STRM助手桥接开关关闭")
             return
         with self._hook_lock:
             if self._hooked_helper is not None:
+                self._set_hook_status("已安装 Hook", "P115StrmHelper 分享转存 Hook 已安装")
                 return
             helper = self._find_p115strmhelper_share_helper()
             if helper is None:
+                self._set_hook_status("未找到 P115StrmHelper", "未找到 P115StrmHelper sharetransferhelper，稍后重试安装 Hook")
                 self._record_event("INFO", "-", "未找到 P115StrmHelper sharetransferhelper，稍后重试安装 Hook")
                 return
             current_func = getattr(helper, "add_share_115", None)
             if current_func is None:
+                self._set_hook_status("未找到 add_share_115", "当前 P115StrmHelper 版本未暴露 add_share_115，分享转存桥接不可用")
                 self._record_event("ERROR", "-", "P115StrmHelper 未找到 add_share_115，分享转存桥接不可用")
                 return
             owner = getattr(helper, "_p115followtransfer_owner", None)
             if owner is self:
                 self._hooked_helper = helper
+                self._set_hook_status("已安装 Hook", "P115StrmHelper 分享转存 Hook 已安装")
                 return
             if owner is not None:
+                self._set_hook_status("已被其他实例包装", "P115StrmHelper add_share_115 已被其他实例包装，跳过 Hook")
                 self._record_event("INFO", "-", "P115StrmHelper add_share_115 已被其他实例包装，跳过 Hook")
                 return
             original_func = getattr(helper, "_p115followtransfer_original_add_share_115", None) or current_func
@@ -426,6 +452,7 @@ class P115FollowTransfer(_PluginBase):
             setattr(helper, "_p115followtransfer_original_add_share_115", original_func)
             setattr(helper, "_p115followtransfer_owner", self)
             self._hooked_helper = helper
+            self._set_hook_status("已安装 Hook", "P115StrmHelper 分享转存 Hook 已安装")
             self._record_event("INFO", "-", "已安装 P115StrmHelper 分享转存 Hook")
 
     def _restore_share_hook(self) -> None:
@@ -442,6 +469,7 @@ class P115FollowTransfer(_PluginBase):
                     setattr(helper, "add_share_115", original_func)
                     delattr(helper, "_p115followtransfer_original_add_share_115")
                     delattr(helper, "_p115followtransfer_owner")
+                    self._set_hook_status("未安装", "插件停止或重载，已恢复 P115StrmHelper 分享转存 Hook")
                     self._record_event("INFO", "-", "已恢复 P115StrmHelper 分享转存 Hook")
                 except Exception as err:
                     logger.debug("【联动115追更】恢复 Hook 失败: %s", err)
@@ -548,7 +576,7 @@ class P115FollowTransfer(_PluginBase):
         try:
             file_item = self._build_file_item(normalized_path)
             if not file_item:
-                self._record_event("ERROR", normalized_path, f"无法解析目录 storage={self._storage_name}")
+                self._record_event("ERROR", normalized_path, self._path_help_message(self._storage_name, normalized_path))
                 return False, False
             transferchain = self._transferchain or TransferChain()
             transferchain.do_transfer(fileitem=file_item, background=True, manual=True)
@@ -603,6 +631,43 @@ class P115FollowTransfer(_PluginBase):
             modify_time=stat_result.st_mtime,
         )
 
+    def _test_paths(self, dirs: List[str], reason: str) -> List[Dict[str, Any]]:
+        results = []
+        for path in self._dedupe_paths(dirs):
+            allowed = self._is_allowed_path(path)
+            item = self._build_file_item(path) if allowed else None
+            message = "可解析，演练通过" if item else self._path_help_message(self._storage_name, path)
+            if not allowed:
+                message = "路径不在允许入队路径前缀内，请检查允许入队路径前缀配置"
+            results.append({
+                "path": path,
+                "storage": self._storage_name,
+                "allowed": allowed,
+                "resolvable": bool(item),
+                "message": message,
+            })
+            self._record_event("DRYRUN" if item and allowed else "ERROR", path, f"{reason}: {message}")
+        if not results:
+            self._record_event("SKIP", "-", f"{reason}: 未配置目录")
+        return results
+
+    @staticmethod
+    def _path_help_message(storage_name: str, path: str) -> str:
+        return (
+            f"无法解析目录：storage={storage_name}, path={path}。请检查："
+            "1. MP 对应储存插件是否启用；"
+            "2. 目标存储名称是否与 MP 储存名称一致；"
+            "3. 路径是否是该储存里的内部路径；"
+            "4. CloudDrive2 通常使用 CloudDrive储存，u115/115网盘Plus 请按实际储存名称填写。"
+        )
+
+    def _set_hook_status(self, status: str, message: str) -> None:
+        with self._runtime_lock:
+            state = self._load_runtime_state()
+            state["share_hook_status"] = status
+            state["share_hook_message"] = message
+            self.save_data(self.RUNTIME_STATE_KEY, state)
+
     def _get_latest_history_id(self) -> int:
         with SessionFactory() as db:
             row = db.execute(
@@ -637,6 +702,8 @@ class P115FollowTransfer(_PluginBase):
         return {
             "enabled": self._enabled,
             "hooked": bool(self._hooked_helper),
+            "share_hook_status": state.get("share_hook_status", "未安装"),
+            "share_hook_message": state.get("share_hook_message", "无"),
             "storage_name": self._storage_name,
             "last_seen_id": state.get("last_seen_id", 0),
             "stats": state.get("stats", {}),
