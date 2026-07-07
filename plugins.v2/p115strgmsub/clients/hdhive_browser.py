@@ -105,6 +105,13 @@ class HDHiveBrowserClient:
                 pairs[key] = value
         return pairs
 
+    @classmethod
+    def _has_auth_cookie(cls, cookie: str) -> bool:
+        pairs = cls._parse_cookie_string(cookie or "")
+        token = str(pairs.get("token") or "").strip()
+        csrf = str(pairs.get("csrf_access_token") or "").strip()
+        return bool(token and csrf)
+
     @staticmethod
     def _cookie_string_from_raw(raw_cookies: List[Dict[str, Any]]) -> str:
         keep = []
@@ -144,10 +151,12 @@ class HDHiveBrowserClient:
 
         for source, cookie in candidates:
             cookie = str(cookie or "").strip()
-            if cookie and "token=" in cookie:
+            if cookie and self._has_auth_cookie(cookie):
                 self._cookie = cookie
                 logger.info(f"HDHive browser: 使用 {source} Cookie")
                 return self._cookie
+            if cookie:
+                logger.info(f"HDHive browser: {source} Cookie 缺少有效登录态，跳过")
         return self._cookie
 
     @staticmethod
@@ -159,7 +168,7 @@ class HDHiveBrowserClient:
                 return ""
             data = json.loads(cookie_file.read_text(encoding="utf-8"))
             cookie = str(data.get("cookie_str") or "").strip()
-            return cookie if "token=" in cookie else ""
+            return cookie if HDHiveBrowserClient._has_auth_cookie(cookie) else ""
         except Exception as e:
             logger.debug(f"HDHive browser: failed to load P115StrmHelper cookie: {e}")
             return ""
@@ -306,7 +315,7 @@ class HDHiveBrowserClient:
     def _refresh_cookie_from_context(self, context: Any):
         try:
             cookie = self._cookie_string_from_raw(context.cookies(self.BASE_URL))
-            if "token=" in cookie:
+            if self._has_auth_cookie(cookie):
                 self._save_cookie(cookie)
         except Exception:
             pass
@@ -358,11 +367,20 @@ class HDHiveBrowserClient:
             except Exception:
                 pass
             raise HDHiveLoginError(f"HDHive login page password field was not found; url={page.url}; body={body}")
-        button = page.locator("button[type='submit'], button:has-text('登录'), button:has-text('Login'), [role='button']:has-text('登录')")
-        if button.count():
-            button.first.click()
-        else:
-            page.keyboard.press("Enter")
+        submitted = False
+        try:
+            password_loc = page.locator("input[name='password'], input[type='password'], #password")
+            if password_loc.count():
+                password_loc.first.press("Enter")
+                submitted = True
+        except Exception:
+            submitted = False
+        if not submitted:
+            submit_button = page.locator("form button[type='submit'], button[type='submit']")
+            if submit_button.count():
+                submit_button.first.click()
+            else:
+                page.keyboard.press("Enter")
         try:
             page.wait_for_load_state("domcontentloaded", timeout=15000)
         except PlaywrightTimeoutError:
