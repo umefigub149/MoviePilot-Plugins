@@ -21,7 +21,7 @@ legacy_manifest = json.loads(LEGACY_MANIFEST.read_text(encoding="utf-8")) if LEG
 assert "class P115FollowTransfer(_PluginBase)" in source
 assert 'plugin_name = "联动115追更"' in source
 assert 'plugin_author = "umefigub149"' in source
-assert 'plugin_version = "1.0.8"' in source
+assert 'plugin_version = "1.0.9"' in source
 assert "def get_command" in source, "_PluginBase abstract get_command must be implemented"
 assert "DownloadHistory" not in source or "downloadhistory" in source
 assert "SELECT id FROM downloadhistory" in source
@@ -40,6 +40,7 @@ assert "记录ID不是记录条数" in readme
 assert "书签位置" in readme and "每个功能是什么意思" in readme
 assert "本插件直接运行，不做演练" in source and "第一次启用时跳过以前的记录" in source
 assert "已连接到 STRM助手" in source
+assert "自动接管 STRM助手分享转存联动" in source
 assert "app.plugins.p115strmhelper.service" in source and "sharetransferhelper" in source
 assert "debounce_seconds" in source
 assert "dry_run" in source and "self._dry_run = False" in source
@@ -55,10 +56,10 @@ assert '"auth": "bear"' in source or "'auth': 'bear'" in source or "'auth': \"be
 
 plugin = manifest["P115FollowTransfer"]
 assert plugin["name"] == "联动115追更"
-assert plugin["version"] == "1.0.8"
+assert plugin["version"] == "1.0.9"
 assert plugin["author"] == "umefigub149"
 assert plugin.get("release") is False
-assert "v1.0.8" in plugin["history"] and "v1.0.7" in plugin["history"] and "v1.0.6" in plugin["history"] and "v1.0.5" in plugin["history"] and "v1.0.4" in plugin["history"] and "v1.0.3" in plugin["history"] and "v1.0.2" in plugin["history"] and "v1.0.1" in plugin["history"] and "v1.0.0" in plugin["history"]
+assert "v1.0.9" in plugin["history"] and "v1.0.8" in plugin["history"] and "v1.0.7" in plugin["history"] and "v1.0.6" in plugin["history"] and "v1.0.5" in plugin["history"] and "v1.0.4" in plugin["history"] and "v1.0.3" in plugin["history"] and "v1.0.2" in plugin["history"] and "v1.0.1" in plugin["history"] and "v1.0.0" in plugin["history"]
 
 for key in ("UID=", "CID=", "SEID=", "KID=", "ghp_", "sk-"):
     for path, text in [(PLUGIN, source), (README, readme)]:

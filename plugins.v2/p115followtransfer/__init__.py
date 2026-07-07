@@ -39,7 +39,7 @@ class P115FollowTransfer(_PluginBase):
     plugin_name = "联动115追更"
     plugin_desc = "检测115追更/STRM助手成功转存后，稍等一会儿把指定目录交给MoviePilot整理"
     plugin_icon = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/cloud.png"
-    plugin_version = "1.0.8"
+    plugin_version = "1.0.9"
     plugin_author = "umefigub149"
     author_url = "https://github.com/umefigub149"
     plugin_config_prefix = "p115followtransfer_"
@@ -438,9 +438,28 @@ class P115FollowTransfer(_PluginBase):
                 self._set_hook_status("已连接", "已连接到 STRM助手的分享转存功能")
                 return
             if owner is not None:
-                self._set_hook_status("已被占用", "STRM助手分享转存接口已被另一个实例连接，本插件先不重复连接")
-                self._record_event("INFO", "-", "STRM助手分享转存接口已被另一个实例连接，本插件先不重复连接")
-                return
+                owner_class = getattr(owner.__class__, "__name__", "")
+                owner_module = getattr(owner.__class__, "__module__", "")
+                if owner_class == self.__class__.__name__ and owner_module == self.__class__.__module__:
+                    original_func = getattr(helper, "_p115followtransfer_original_add_share_115", None)
+                    if original_func is not None:
+                        try:
+                            setattr(helper, "add_share_115", original_func)
+                            delattr(helper, "_p115followtransfer_original_add_share_115")
+                            delattr(helper, "_p115followtransfer_owner")
+                            current_func = original_func
+                            self._record_event("INFO", "-", "检测到旧连接残留，已自动接管 STRM助手分享转存联动")
+                        except Exception as err:
+                            logger.error("【联动115追更】接管旧连接失败: %s", err, exc_info=True)
+                            self._set_hook_status("已被占用", "旧连接残留但自动接管失败，请重载插件或重启 MP")
+                            return
+                    else:
+                        self._set_hook_status("已被占用", "旧连接残留但找不到原始接口，请重载插件或重启 MP")
+                        return
+                else:
+                    self._set_hook_status("已被占用", "STRM助手分享转存接口已被其他插件连接，本插件先不重复连接")
+                    self._record_event("INFO", "-", "STRM助手分享转存接口已被其他插件连接，本插件先不重复连接")
+                    return
             original_func = getattr(helper, "_p115followtransfer_original_add_share_115", None) or current_func
             bridge = self
             generation = self._generation
