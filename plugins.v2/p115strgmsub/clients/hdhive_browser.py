@@ -636,60 +636,125 @@ class HDHiveBrowserClient:
         match = re.search(r"https?://(?:115cdn|115)\.com/\S+", value or "")
         return match.group(0).rstrip(" \n\r\t\"'<>") if match else ""
 
+    @classmethod
+    def _extract_115_url_from_json(cls, value: Any) -> str:
+        """Recursively find a 115 share URL in arbitrary JSON returned by HDHive."""
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return cls._extract_115_url(value)
+        if isinstance(value, dict):
+            preferred_keys = ("full_url", "url", "link", "resource_url", "share_url", "shareUrl", "content", "text")
+            for key in preferred_keys:
+                if key in value:
+                    found = cls._extract_115_url_from_json(value.get(key))
+                    if found:
+                        return found
+            for item in value.values():
+                found = cls._extract_115_url_from_json(item)
+                if found:
+                    return found
+        if isinstance(value, list):
+            for item in value:
+                found = cls._extract_115_url_from_json(item)
+                if found:
+                    return found
+        return ""
+
+    @staticmethod
+    def _page_is_login(page: Any) -> bool:
+        try:
+            return "/login" in str(page.url or "")
+        except Exception:
+            return False
+
     def unlock_resource(self, slug: str) -> Dict[str, Any]:
         if not slug:
             raise HDHiveBrowserError("Missing HDHive resource slug")
         def _operation(context: Any) -> Dict[str, Any]:
             page = context.new_page()
             captured_url = ""
+            resource_url = f"{self.BASE_URL}/resource/115/{slug}"
 
             def on_response(response: Any):
                 nonlocal captured_url
                 try:
                     if response.status != 200:
                         return
-                    if "json" not in response.headers.get("content-type", ""):
+                    content_type = response.headers.get("content-type", "")
+                    if "json" not in content_type:
                         return
-                    body = response.json()
-                    data = body.get("data") if isinstance(body, dict) else None
-                    if isinstance(data, dict):
-                        for key in ("full_url", "url", "link", "resource_url", "share_url"):
-                            found = self._extract_115_url(str(data.get(key) or ""))
-                            if found:
-                                captured_url = found
-                                return
+                    found = self._extract_115_url_from_json(response.json())
+                    if found:
+                        captured_url = found
                 except Exception:
                     pass
 
             page.on("response", on_response)
-            page.goto(f"{self.BASE_URL}/resource/115/{slug}", wait_until="domcontentloaded", timeout=30000)
-            try:
-                page.wait_for_load_state("networkidle", timeout=15000)
-            except Exception:
-                pass
-            page.wait_for_timeout(1500)
-            if "/login" in page.url:
-                raise HDHiveLoginError("HDHive cookie was redirected to login page")
 
             extract_script = r"""
             () => {
-                const re = /^https?:\/\/(115cdn|115)\.com\//;
-                for (const el of document.querySelectorAll('input,textarea,a,code,div,span,p')) {
-                    const value = ((el.value || el.href || el.textContent || '') + '').trim();
-                    if (re.test(value)) return value;
+                const textParts = [];
+                const push = (value) => {
+                    value = ((value || '') + '').trim();
+                    if (value) textParts.push(value);
+                };
+                for (const el of document.querySelectorAll('input,textarea,a,code,pre,div,span,p,button')) {
+                    push(el.value);
+                    push(el.href);
+                    push(el.getAttribute && el.getAttribute('data-clipboard-text'));
+                    push(el.getAttribute && el.getAttribute('data-url'));
+                    push(el.getAttribute && el.getAttribute('data-link'));
+                    push(el.textContent);
                 }
-                const text = document.body ? document.body.innerText || '' : '';
-                const match = text.match(/https?:\/\/(115cdn|115)\.com\/\S+/);
+                if (document.body) push(document.body.innerText);
+                if (document.documentElement) push(document.documentElement.innerHTML);
+                const joined = textParts.join('\n');
+                const match = joined.match(/https?:\/\/(115cdn|115)\.com\/[^\s"'<>]+/);
                 return match ? match[0] : '';
             }
             """
 
-            def safe_extract_url(timeout_seconds: int = 20) -> str:
+            click_script = r"""
+            () => {
+                const keywords = ['获取链接', '查看链接', '复制链接', '打开链接', '网盘链接', '115链接', '确认解锁', '解锁', '获取', '查看', '复制'];
+                const nodes = Array.from(document.querySelectorAll('button,[role="button"],a'));
+                for (const el of nodes) {
+                    const text = ((el.innerText || el.textContent || el.getAttribute('aria-label') || '') + '').trim();
+                    if (!text) continue;
+                    if (keywords.some(k => text.includes(k))) {
+                        el.click();
+                        return text;
+                    }
+                }
+                return '';
+            }
+            """
+
+            def wait_page_stable(reason: str, timeout_ms: int = 10000) -> None:
+                try:
+                    page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+                except Exception:
+                    pass
+                try:
+                    page.wait_for_load_state("networkidle", timeout=min(timeout_ms, 8000))
+                except Exception:
+                    pass
+                try:
+                    page.wait_for_timeout(1000)
+                except Exception:
+                    pass
+                logger.debug(f"HDHive (Browser) 页面稳定等待完成：{reason}，当前页面={getattr(page, 'url', '')}")
+
+            def safe_extract_url(timeout_seconds: int = 20, stage: str = "取链接") -> str:
                 deadline = time() + timeout_seconds
                 last_error = ""
+                retry_notified = False
                 while time() < deadline:
                     if captured_url:
                         return self._extract_115_url(captured_url)
+                    if self._page_is_login(page):
+                        raise HDHiveLoginError("HDHive cookie was redirected to login page")
                     try:
                         value = page.evaluate(extract_script)
                         url = self._extract_115_url(value)
@@ -698,37 +763,66 @@ class HDHiveBrowserClient:
                     except Exception as e:
                         last_error = str(e)
                         if "Execution context was destroyed" in last_error or "navigation" in last_error.lower():
-                            try:
-                                page.wait_for_load_state("domcontentloaded", timeout=5000)
-                            except Exception:
-                                pass
+                            if not retry_notified:
+                                logger.info(f"HDHive (Browser) {stage}时页面发生跳转，等待页面稳定后重试")
+                                retry_notified = True
+                            wait_page_stable(stage, timeout_ms=6000)
                         else:
-                            logger.debug(f"HDHive (Browser) 提取115链接失败，将重试: {e}")
-                    page.wait_for_timeout(500)
+                            logger.debug(f"HDHive (Browser) {stage}失败，将重试: {e}")
+                    try:
+                        page.wait_for_timeout(500)
+                    except Exception:
+                        pass
                 if last_error:
-                    logger.debug(f"HDHive (Browser) 提取115链接超时，最后错误: {last_error}")
+                    logger.debug(f"HDHive (Browser) {stage}超时，最后错误: {last_error}")
                 return ""
 
-            existing_url = safe_extract_url(timeout_seconds=8)
-            if existing_url:
-                return {"url": existing_url, "full_url": existing_url, "already_owned": True}
+            def goto_resource(reason: str) -> None:
+                logger.info(f"HDHive (Browser) 打开资源详情：{slug}（{reason}）")
+                page.goto(resource_url, wait_until="domcontentloaded", timeout=30000)
+                wait_page_stable(reason, timeout_ms=12000)
+                if self._page_is_login(page):
+                    raise HDHiveLoginError("HDHive cookie was redirected to login page")
 
-            confirm = page.locator(
-                "button:has-text('\u786e\u5b9a\u89e3\u9501'), "
-                "button:has-text('\u89e3\u9501'), "
-                "[role='button']:has-text('\u786e\u5b9a\u89e3\u9501'), "
-                "[role='button']:has-text('\u89e3\u9501')"
-            )
-            if not confirm.count():
-                raise HDHiveBrowserError("HDHive unlock button was not found")
-            confirm.first.click()
+            def try_click_link_button(stage: str) -> bool:
+                try:
+                    clicked_text = page.evaluate(click_script) or ""
+                    if clicked_text:
+                        logger.info(f"HDHive (Browser) {stage}：已点击“{clicked_text}”按钮，等待115链接出现")
+                        wait_page_stable(stage, timeout_ms=8000)
+                        return True
+                except Exception as e:
+                    logger.debug(f"HDHive (Browser) {stage}点击按钮失败: {e}")
+                return False
+
+            goto_resource("首次进入")
+
+            for attempt in range(1, 4):
+                url = safe_extract_url(timeout_seconds=8 if attempt == 1 else 12, stage=f"第{attempt}次直接提取115链接")
+                if url:
+                    logger.info(f"HDHive (Browser) 已直接获得115链接：slug={slug}，尝试={attempt}")
+                    return {"url": url, "full_url": url, "already_owned": True}
+                if try_click_link_button(f"第{attempt}次尝试获取/解锁链接"):
+                    url = safe_extract_url(timeout_seconds=18, stage=f"第{attempt}次点击后提取115链接")
+                    if url:
+                        logger.info(f"HDHive (Browser) 点击后获得115链接：slug={slug}，尝试={attempt}")
+                        return {"url": url, "full_url": url, "already_owned": attempt == 1}
+                if attempt < 3:
+                    try:
+                        logger.info(f"HDHive (Browser) 未取到115链接，重新进入资源页重试：slug={slug}，下一次={attempt + 1}")
+                        goto_resource(f"第{attempt + 1}次重进")
+                    except Exception as e:
+                        logger.debug(f"HDHive (Browser) 重新进入资源页失败: {e}")
+
+            current_url = ""
+            page_text = ""
             try:
-                page.wait_for_load_state("domcontentloaded", timeout=10000)
+                current_url = str(page.url or "")
+                page_text = str(page.evaluate("() => document.body ? document.body.innerText.slice(0, 300) : ''") or "")
             except Exception:
                 pass
-
-            url = safe_extract_url(timeout_seconds=25)
-            if not url:
-                raise HDHiveBrowserError("HDHive unlock did not expose a 115 URL")
-            return {"url": url, "full_url": url, "already_owned": False}
+            raise HDHiveBrowserError(
+                "HDHive did not expose a 115 URL after retries; "
+                f"current_url={current_url}, page_text={page_text[:120]}"
+            )
         return self._run_authenticated(_operation)
