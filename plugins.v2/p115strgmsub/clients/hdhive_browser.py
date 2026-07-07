@@ -720,8 +720,16 @@ class HDHiveBrowserClient:
 
     @staticmethod
     def _extract_115_url(value: str) -> str:
-        match = re.search(r"https?://(?:115cdn|115|anxia)\.com/\S+", value or "")
-        return match.group(0).rstrip(" \n\r\t\"'<>") if match else ""
+        text = value or ""
+        patterns = [
+            r"https?://(?:115cdn|anxia)\.com/s/[A-Za-z0-9]+(?:\?password=[A-Za-z0-9]{4})?",
+            r"https?://115\.com/s/[A-Za-z0-9]+(?:\?password=[A-Za-z0-9]{4})?",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                return match.group(0).rstrip(" \n\r\t\"'<>")
+        return ""
 
     @classmethod
     def _extract_115_url_from_json(cls, value: Any) -> str:
@@ -797,7 +805,7 @@ class HDHiveBrowserClient:
                 if (document.body) push(document.body.innerText);
                 if (document.documentElement) push(document.documentElement.innerHTML);
                 const joined = textParts.join('\n');
-                const match = joined.match(/https?:\/\/(115cdn|115|anxia)\.com\/[^\s"'<>]+/);
+                const match = joined.match(/https?:\/\/(115cdn|anxia)\.com\/s\/[A-Za-z0-9]+(?:\?password=[A-Za-z0-9]{4})?|https?:\/\/115\.com\/s\/[A-Za-z0-9]+(?:\?password=[A-Za-z0-9]{4})?/);
                 return match ? match[0] : '';
             }
             """
