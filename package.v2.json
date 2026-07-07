@@ -81,11 +81,12 @@
     "release": false,
     "description": "联动115网盘订阅追更-自用版与115网盘STRM助手，检测成功转存后延迟将指定115目录加入MoviePilot整理队列。",
     "labels": "115网盘,订阅,STRM助手,整理,桥接,CloudDrive2",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/cloud.png",
     "author": "umefigub149",
     "level": 1,
     "history": {
+      "v1.0.3": "修复 STRM助手分享转存联动找不到的问题：改为连接 P115StrmHelper 的 servicer.sharetransferhelper；同时把界面、日志和文档中的 Hook/Dry Run/游标等术语改成通俗中文，并补充每个功能的说明。",
       "v1.0.2": "修复历史游标初始化不够稳的问题：新增 cursor_initialized 标记，首次启用或从旧运行态升级时会以当前最大 DownloadHistory 记录ID为起点，避免回放旧历史；日志文案改为“新增N条/最新记录ID=xxx”，避免把记录ID误解为记录条数。",
       "v1.0.1": "增强配置可读性：Dry Run 改为中文“演练模式”；目标存储改为可选 CloudDrive储存/u115/115网盘Plus/local 的下拉输入；新增追更/分享目录解析测试 API；增强 STRM助手 Hook 状态显示与路径解析失败提示；README 说明与 115strm助手网盘管理的区别。",
       "v1.0.0": "首次发布：支持P115StrgmSub成功转存历史触发固定目录入队；支持P115StrmHelper分享转存成功Hook后延迟入队固定目录；支持CloudDrive储存、路径白名单、防抖和Dry Run。"

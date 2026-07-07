@@ -37,9 +37,9 @@ class P115FollowTransfer(_PluginBase):
     """联动115追更：成功转存后延迟把固定目录加入 MP 整理队列。"""
 
     plugin_name = "联动115追更"
-    plugin_desc = "检测115追更/STRM助手成功转存后，延迟将指定115目录加入MoviePilot整理队列"
+    plugin_desc = "检测115追更/STRM助手成功转存后，稍等一会儿把指定目录交给MoviePilot整理"
     plugin_icon = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/cloud.png"
-    plugin_version = "1.0.2"
+    plugin_version = "1.0.3"
     plugin_author = "umefigub149"
     author_url = "https://github.com/umefigub149"
     plugin_config_prefix = "p115followtransfer_"
@@ -185,7 +185,7 @@ class P115FollowTransfer(_PluginBase):
                 "endpoint": self.api_reset_cursor,
                 "methods": ["POST"],
                 "auth": "bear",
-                "summary": "重置追更游标",
+                "summary": "从当前记录重新开始",
             },
         ]
 
@@ -221,7 +221,7 @@ class P115FollowTransfer(_PluginBase):
                         "props": {
                             "type": "info",
                             "variant": "tonal",
-                            "text": "检测到 115追更 或 STRM助手分享转存成功后，只把你手动配置的固定目录加入整理队列；不精确识别子目录、不扫描115目录。",
+                            "text": "检测到 115追更 或 STRM助手分享转存成功后，只把你手动配置的固定目录交给 MoviePilot 整理；不扫描115目录、不乱猜子目录。",
                         },
                     },
                     {
@@ -230,39 +230,39 @@ class P115FollowTransfer(_PluginBase):
                             {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VSwitch", "props": {"model": "enabled", "label": "启用插件"}}]},
                             {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VSwitch", "props": {"model": "onlyonce", "label": "立即运行一次"}}]},
                             {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VSwitch", "props": {"model": "dry_run", "label": "演练模式（只记录日志，不真正入队）"}}]},
-                            {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VSwitch", "props": {"model": "first_run_ignore_existing", "label": "首次忽略旧记录"}}]},
+                            {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VSwitch", "props": {"model": "first_run_ignore_existing", "label": "第一次启用时跳过以前的记录"}}]},
                         ],
                     },
                     {
                         "component": "VRow",
                         "content": [
                             {"component": "VCol", "props": {"cols": 12, "md": 4}, "content": [{"component": "VCombobox", "props": {"model": "storage_name", "label": "目标存储", "items": [{"title": "CloudDrive2（CloudDrive储存）", "value": "CloudDrive储存"}, {"title": "u115", "value": "u115"}, {"title": "115网盘Plus", "value": "115网盘Plus"}, {"title": "本地存储（local）", "value": "local"}], "placeholder": "CloudDrive储存", "hint": "115内部路径通常选 CloudDrive储存；也可按实际 MP 存储名称选择 u115、115网盘Plus、local 或手动输入。", "persistentHint": True}}]},
-                            {"component": "VCol", "props": {"cols": 12, "md": 4}, "content": [{"component": "VTextField", "props": {"model": "cron", "label": "追更检测周期", "placeholder": "*/5 * * * *"}}]},
-                            {"component": "VCol", "props": {"cols": 12, "md": 4}, "content": [{"component": "VTextField", "props": {"model": "source_username", "label": "追更来源用户名", "placeholder": "P115StrgmSub"}}]},
+                            {"component": "VCol", "props": {"cols": 12, "md": 4}, "content": [{"component": "VTextField", "props": {"model": "cron", "label": "多久检查一次追更", "placeholder": "*/5 * * * *"}}]},
+                            {"component": "VCol", "props": {"cols": 12, "md": 4}, "content": [{"component": "VTextField", "props": {"model": "source_username", "label": "追更记录来源", "placeholder": "P115StrgmSub"}}]},
                         ],
                     },
                     {
                         "component": "VRow",
                         "content": [
-                            {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VSwitch", "props": {"model": "follow_enabled", "label": "启用追更联动"}}]},
-                            {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VTextField", "props": {"model": "follow_delay_seconds", "label": "追更延迟秒数", "type": "number"}}]},
-                            {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VSwitch", "props": {"model": "share_hook_enabled", "label": "启用STRM助手桥接"}}]},
-                            {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VTextField", "props": {"model": "share_delay_seconds", "label": "分享延迟秒数", "type": "number"}}]},
+                            {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VSwitch", "props": {"model": "follow_enabled", "label": "追更转存后自动整理"}}]},
+                            {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VTextField", "props": {"model": "follow_delay_seconds", "label": "追更成功后等待几秒再整理", "type": "number"}}]},
+                            {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VSwitch", "props": {"model": "share_hook_enabled", "label": "STRM助手分享转存后自动整理"}}]},
+                            {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VTextField", "props": {"model": "share_delay_seconds", "label": "分享转存成功后等待几秒再整理", "type": "number"}}]},
                         ],
                     },
                     {
                         "component": "VRow",
                         "content": [
-                            {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [{"component": "VTextarea", "props": {"model": "follow_dirs", "label": "追更入队目录（一行一个）", "rows": 4, "hint": "P115StrgmSub 有新转存记录后，将这些固定目录入队。", "persistentHint": True}}]},
-                            {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [{"component": "VTextarea", "props": {"model": "share_dirs", "label": "STRM助手分享转存入队目录（一行一个）", "rows": 4, "hint": "P115StrmHelper 分享转存成功后，将这些固定目录入队。", "persistentHint": True}}]},
+                            {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [{"component": "VTextarea", "props": {"model": "follow_dirs", "label": "追更成功后要整理的目录（一行一个）", "rows": 4, "hint": "115追更插件转存成功后，会把这些目录交给 MoviePilot 整理。", "persistentHint": True}}]},
+                            {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [{"component": "VTextarea", "props": {"model": "share_dirs", "label": "分享转存成功后要整理的目录（一行一个）", "rows": 4, "hint": "STRM助手分享转存成功后，会把这些目录交给 MoviePilot 整理。", "persistentHint": True}}]},
                         ],
                     },
                     {
                         "component": "VRow",
                         "content": [
-                            {"component": "VCol", "props": {"cols": 12, "md": 8}, "content": [{"component": "VTextarea", "props": {"model": "allowed_roots", "label": "允许入队路径前缀（一行一个）", "rows": 3, "hint": "安全过滤，只允许这些前缀下的目录入队；不要填写 / 。", "persistentHint": True}}]},
-                            {"component": "VCol", "props": {"cols": 12, "md": 2}, "content": [{"component": "VTextField", "props": {"model": "debounce_seconds", "label": "防抖秒数", "type": "number"}}]},
-                            {"component": "VCol", "props": {"cols": 12, "md": 2}, "content": [{"component": "VTextField", "props": {"model": "recent_events_limit", "label": "事件数量", "type": "number"}}]},
+                            {"component": "VCol", "props": {"cols": 12, "md": 8}, "content": [{"component": "VTextarea", "props": {"model": "allowed_roots", "label": "只允许整理这些路径下面的目录（一行一个）", "rows": 3, "hint": "安全保护：只有这些路径下面的目录才会被整理；不要填写 / 。", "persistentHint": True}}]},
+                            {"component": "VCol", "props": {"cols": 12, "md": 2}, "content": [{"component": "VTextField", "props": {"model": "debounce_seconds", "label": "短时间内防重复整理秒数", "type": "number"}}]},
+                            {"component": "VCol", "props": {"cols": 12, "md": 2}, "content": [{"component": "VTextField", "props": {"model": "recent_events_limit", "label": "页面保留多少条记录", "type": "number"}}]},
                         ],
                     },
                 ],
@@ -307,9 +307,9 @@ class P115FollowTransfer(_PluginBase):
                 "props": {"type": "info", "variant": "tonal"},
                 "text": (
                     f"状态：{'启用' if self._enabled else '停用'}；"
-                    f"STRM助手桥接：{state.get('share_hook_status', '未安装')}（{state.get('share_hook_message', '无')}）；"
-                    f"追更游标：{state.get('last_seen_id', 0)}；"
-                    f"成功入队：{stats.get('enqueue_success', 0)}；失败：{stats.get('enqueue_error', 0)}；跳过：{stats.get('enqueue_skip', 0)}"
+                    f"STRM助手分享联动：{state.get('share_hook_status', '未连接')}（{state.get('share_hook_message', '无')}）；"
+                    f"已处理到记录ID：{state.get('last_seen_id', 0)}；"
+                    f"已成功交给MP整理：{stats.get('enqueue_success', 0)}；失败：{stats.get('enqueue_error', 0)}；跳过：{stats.get('enqueue_skip', 0)}"
                 ),
             },
             {
@@ -334,22 +334,22 @@ class P115FollowTransfer(_PluginBase):
         return {"success": True, "data": self._status_payload()}
 
     def api_poll_now(self) -> Dict[str, Any]:
-        result = self.scan_follow_history(reason="API立即检测")
+        result = self.scan_follow_history(reason="手动立即检查")
         return {"success": True, "data": result}
 
     def api_enqueue_follow_roots(self) -> Dict[str, Any]:
-        result = self.enqueue_follow_dirs_now(reason="API手动入队追更目录")
+        result = self.enqueue_follow_dirs_now(reason="手动把追更目录交给MP整理")
         return {"success": True, "data": result}
 
     def api_enqueue_share_roots(self) -> Dict[str, Any]:
-        result = self.enqueue_share_dirs_now(reason="API手动入队分享目录")
+        result = self.enqueue_share_dirs_now(reason="手动把分享目录交给MP整理")
         return {"success": True, "data": result}
 
     def api_test_follow_paths(self) -> Dict[str, Any]:
-        return {"success": True, "data": self._test_paths(self._parse_lines(self._follow_dirs_text), "追更目录解析测试")}
+        return {"success": True, "data": self._test_paths(self._parse_lines(self._follow_dirs_text), "测试追更目录能不能整理")}
 
     def api_test_share_paths(self) -> Dict[str, Any]:
-        return {"success": True, "data": self._test_paths(self._parse_lines(self._share_dirs_text), "分享目录解析测试")}
+        return {"success": True, "data": self._test_paths(self._parse_lines(self._share_dirs_text), "测试分享目录能不能整理")}
 
     def api_clear_cache(self) -> Dict[str, Any]:
         with self._runtime_lock:
@@ -366,7 +366,7 @@ class P115FollowTransfer(_PluginBase):
             state["last_seen_id"] = latest_id
             state["cursor_initialized"] = True
             self.save_data(self.RUNTIME_STATE_KEY, state)
-        self._record_event("CURSOR", "-", f"追更游标已重置为当前最大记录ID={latest_id}")
+        self._record_event("CURSOR", "-", f"已从当前最新位置重新开始：当前最新记录ID={latest_id}，以前的记录不会再处理")
         return {"success": True, "last_seen_id": latest_id}
 
     def scan_follow_history(self, reason: str = "定时检测") -> Dict[str, int]:
@@ -383,7 +383,7 @@ class P115FollowTransfer(_PluginBase):
             state["last_seen_id"] = latest_id
             state["cursor_initialized"] = True
             self.save_data(self.RUNTIME_STATE_KEY, state)
-            self._record_event("CURSOR", "-", f"首次启用/升级初始化游标：当前最大记录ID={latest_id}，已忽略旧历史")
+            self._record_event("CURSOR", "-", f"第一次启用或升级后，从当前最新位置开始：当前最新记录ID={latest_id}，以前的记录已跳过")
             return {"seen": 0, "scheduled": 0, "skipped": 1, "errors": 0}
         ids = self._get_new_history_ids(last_seen_id)
         if not ids:
@@ -408,30 +408,30 @@ class P115FollowTransfer(_PluginBase):
 
     def _install_share_hook(self) -> None:
         if not self._enabled or not self._share_hook_enabled:
-            self._set_hook_status("未启用桥接", "插件未启用或 STRM助手桥接开关关闭")
+            self._set_hook_status("未开启", "插件未启用，或没有打开“STRM助手分享转存后自动整理”")
             return
         with self._hook_lock:
             if self._hooked_helper is not None:
-                self._set_hook_status("已安装 Hook", "P115StrmHelper 分享转存 Hook 已安装")
+                self._set_hook_status("已连接", "已连接到 STRM助手的分享转存功能")
                 return
             helper = self._find_p115strmhelper_share_helper()
             if helper is None:
-                self._set_hook_status("未找到 P115StrmHelper", "未找到 P115StrmHelper sharetransferhelper，稍后重试安装 Hook")
-                self._record_event("INFO", "-", "未找到 P115StrmHelper sharetransferhelper，稍后重试安装 Hook")
+                self._set_hook_status("没连上STRM助手", "没有找到 STRM助手的分享转存功能；请确认 STRM助手已启用")
+                self._record_event("INFO", "-", "没有找到 STRM助手的分享转存功能；稍后会再试")
                 return
             current_func = getattr(helper, "add_share_115", None)
             if current_func is None:
-                self._set_hook_status("未找到 add_share_115", "当前 P115StrmHelper 版本未暴露 add_share_115，分享转存桥接不可用")
-                self._record_event("ERROR", "-", "P115StrmHelper 未找到 add_share_115，分享转存桥接不可用")
+                self._set_hook_status("版本不兼容", "当前 STRM助手版本没有可连接的分享转存接口")
+                self._record_event("ERROR", "-", "当前 STRM助手版本没有可连接的分享转存接口")
                 return
             owner = getattr(helper, "_p115followtransfer_owner", None)
             if owner is self:
                 self._hooked_helper = helper
-                self._set_hook_status("已安装 Hook", "P115StrmHelper 分享转存 Hook 已安装")
+                self._set_hook_status("已连接", "已连接到 STRM助手的分享转存功能")
                 return
             if owner is not None:
-                self._set_hook_status("已被其他实例包装", "P115StrmHelper add_share_115 已被其他实例包装，跳过 Hook")
-                self._record_event("INFO", "-", "P115StrmHelper add_share_115 已被其他实例包装，跳过 Hook")
+                self._set_hook_status("已被占用", "STRM助手分享转存接口已被另一个实例连接，本插件先不重复连接")
+                self._record_event("INFO", "-", "STRM助手分享转存接口已被另一个实例连接，本插件先不重复连接")
                 return
             original_func = getattr(helper, "_p115followtransfer_original_add_share_115", None) or current_func
             bridge = self
@@ -457,8 +457,8 @@ class P115FollowTransfer(_PluginBase):
             setattr(helper, "_p115followtransfer_original_add_share_115", original_func)
             setattr(helper, "_p115followtransfer_owner", self)
             self._hooked_helper = helper
-            self._set_hook_status("已安装 Hook", "P115StrmHelper 分享转存 Hook 已安装")
-            self._record_event("INFO", "-", "已安装 P115StrmHelper 分享转存 Hook")
+            self._set_hook_status("已连接", "已连接到 STRM助手的分享转存功能")
+            self._record_event("INFO", "-", "已连接到 STRM助手分享转存功能")
 
     def _restore_share_hook(self) -> None:
         with self._hook_lock:
@@ -474,8 +474,8 @@ class P115FollowTransfer(_PluginBase):
                     setattr(helper, "add_share_115", original_func)
                     delattr(helper, "_p115followtransfer_original_add_share_115")
                     delattr(helper, "_p115followtransfer_owner")
-                    self._set_hook_status("未安装", "插件停止或重载，已恢复 P115StrmHelper 分享转存 Hook")
-                    self._record_event("INFO", "-", "已恢复 P115StrmHelper 分享转存 Hook")
+                    self._set_hook_status("未连接", "插件停止或重载，已断开 STRM助手分享转存联动")
+                    self._record_event("INFO", "-", "已断开 STRM助手分享转存联动")
                 except Exception as err:
                     logger.debug("【联动115追更】恢复 Hook 失败: %s", err)
             self._hooked_helper = None
@@ -486,6 +486,14 @@ class P115FollowTransfer(_PluginBase):
 
     @staticmethod
     def _find_p115strmhelper_share_helper() -> Any:
+        try:
+            from app.plugins.p115strmhelper.service import servicer as p115strm_servicer
+            helper = getattr(p115strm_servicer, "sharetransferhelper", None)
+            if helper is not None:
+                return helper
+        except Exception as err:
+            logger.debug("【联动115追更】读取 STRM助手服务对象失败: %s", err)
+
         manager = PluginManager()
         candidate_ids = ["P115StrmHelper", "p115strmhelper"] + manager.get_running_plugin_ids()
         seen = set()
@@ -496,9 +504,9 @@ class P115FollowTransfer(_PluginBase):
             helper = manager.get_plugin_attr(pid, "sharetransferhelper")
             if helper is not None:
                 return helper
-            plugin = manager.get_plugin_attr(pid, "_sharetransferhelper")
-            if plugin is not None:
-                return plugin
+            helper = manager.get_plugin_attr(pid, "_sharetransferhelper")
+            if helper is not None:
+                return helper
         return None
 
     def _schedule_dirs(
@@ -545,7 +553,7 @@ class P115FollowTransfer(_PluginBase):
             state["last_seen_id"] = max(self._safe_int(state.get("last_seen_id"), 0), cursor_id)
             state["cursor_initialized"] = True
             self.save_data(self.RUNTIME_STATE_KEY, state)
-            self._record_event("CURSOR", "-", f"追更游标推进到记录ID={cursor_id}")
+            self._record_event("CURSOR", "-", f"已处理到记录ID={cursor_id}")
 
     def _enqueue_dirs(self, dirs: List[str], reason: str, source: str, cursor_id: Optional[int]) -> Dict[str, int]:
         enqueued = 0
@@ -660,11 +668,11 @@ class P115FollowTransfer(_PluginBase):
     @staticmethod
     def _path_help_message(storage_name: str, path: str) -> str:
         return (
-            f"无法解析目录：storage={storage_name}, path={path}。请检查："
-            "1. MP 对应储存插件是否启用；"
-            "2. 目标存储名称是否与 MP 储存名称一致；"
-            "3. 路径是否是该储存里的内部路径；"
-            "4. CloudDrive2 通常使用 CloudDrive储存，u115/115网盘Plus 请按实际储存名称填写。"
+            f"这个目录现在不能交给 MP 整理：目标存储={storage_name}，目录={path}。请检查："
+            "1. 对应的 MP 存储插件是否已经启用；"
+            "2. 目标存储名称是否填对，例如 CloudDrive储存、u115、115网盘Plus；"
+            "3. 目录路径是否是这个存储里能看到的路径；"
+            "4. 如果你用的是 CloudDrive2，通常目标存储填 CloudDrive储存。"
         )
 
     def _set_hook_status(self, status: str, message: str) -> None:
@@ -768,14 +776,14 @@ class P115FollowTransfer(_PluginBase):
     @staticmethod
     def _status_text(status: str) -> str:
         return {
-            "ENQUEUE": "✅ 已入队",
-            "DRYRUN": "🧪 演练",
+            "ENQUEUE": "✅ 已交给MP整理",
+            "DRYRUN": "🧪 只演练未真正整理",
             "SKIP": "⚠️ 已跳过",
             "ERROR": "❌ 错误",
             "INFO": "ℹ️ 信息",
-            "CURSOR": "🔰 游标",
+            "CURSOR": "🔰 已处理位置",
             "CACHE": "🧹 缓存",
-            "SCHEDULE": "⏰ 已调度",
+            "SCHEDULE": "⏰ 已安排稍后整理",
         }.get(status, status)
 
     def _is_allowed_path(self, path: str) -> bool:
