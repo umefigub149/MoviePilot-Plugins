@@ -39,7 +39,7 @@ class P115FollowTransfer(_PluginBase):
     plugin_name = "联动115追更"
     plugin_desc = "检测115追更/STRM助手成功转存后，稍等一会儿把指定目录交给MoviePilot整理"
     plugin_icon = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/cloud.png"
-    plugin_version = "1.0.6"
+    plugin_version = "1.0.7"
     plugin_author = "umefigub149"
     author_url = "https://github.com/umefigub149"
     plugin_config_prefix = "p115followtransfer_"
@@ -689,6 +689,13 @@ class P115FollowTransfer(_PluginBase):
             "3. 目录路径是否是这个存储里能看到的路径；"
             "4. 如果你用的是 CloudDrive2，通常目标存储填 CloudDrive储存，路径前缀填 /115open。"
         )
+
+    def _set_hook_status(self, status: str, message: str) -> None:
+        with self._runtime_lock:
+            state = self._load_runtime_state()
+            state["share_hook_status"] = status
+            state["share_hook_message"] = message
+            self.save_data(self.RUNTIME_STATE_KEY, state)
 
     def _get_latest_history_id(self) -> int:
         with SessionFactory() as db:
