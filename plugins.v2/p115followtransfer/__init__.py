@@ -39,7 +39,7 @@ class P115FollowTransfer(_PluginBase):
     plugin_name = "联动115追更"
     plugin_desc = "检测115追更/STRM助手成功转存后，稍等一会儿把指定目录交给MoviePilot整理"
     plugin_icon = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/cloud.png"
-    plugin_version = "1.0.3"
+    plugin_version = "1.0.4"
     plugin_author = "umefigub149"
     author_url = "https://github.com/umefigub149"
     plugin_config_prefix = "p115followtransfer_"
@@ -89,7 +89,7 @@ class P115FollowTransfer(_PluginBase):
         config = config or {}
         self._enabled = bool(config.get("enabled", False))
         self._onlyonce = bool(config.get("onlyonce", False))
-        self._dry_run = bool(config.get("dry_run", False))
+        self._dry_run = False
         self._cron = str(config.get("cron") or self.DEFAULT_CRON).strip() or self.DEFAULT_CRON
         self._source_username = str(config.get("source_username") or self.DEFAULT_SOURCE_USERNAME).strip() or self.DEFAULT_SOURCE_USERNAME
         self._first_run_ignore_existing = bool(config.get("first_run_ignore_existing", True))
@@ -114,12 +114,11 @@ class P115FollowTransfer(_PluginBase):
             worker.start()
 
         logger.info(
-            "【联动115追更】插件初始化完成 enabled=%s follow=%s share_hook=%s storage=%s dry_run=%s",
+            "【联动115追更】插件初始化完成：启用=%s，追更联动=%s，STRM助手分享联动=%s，目标存储=%s，运行方式=直接运行",
             self._enabled,
             self._follow_enabled,
             self._share_hook_enabled,
             self._storage_name,
-            self._dry_run,
         )
 
     def get_state(self) -> bool:
@@ -229,7 +228,7 @@ class P115FollowTransfer(_PluginBase):
                         "content": [
                             {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VSwitch", "props": {"model": "enabled", "label": "启用插件"}}]},
                             {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VSwitch", "props": {"model": "onlyonce", "label": "立即运行一次"}}]},
-                            {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VSwitch", "props": {"model": "dry_run", "label": "演练模式（只记录日志，不真正入队）"}}]},
+                            {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VAlert", "props": {"type": "warning", "variant": "tonal", "density": "compact", "text": "本插件直接运行，不做演练；请先确认目录配置正确。"}}]},
                             {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VSwitch", "props": {"model": "first_run_ignore_existing", "label": "第一次启用时跳过以前的记录"}}]},
                         ],
                     },
@@ -370,12 +369,15 @@ class P115FollowTransfer(_PluginBase):
         return {"success": True, "last_seen_id": latest_id}
 
     def scan_follow_history(self, reason: str = "定时检测") -> Dict[str, int]:
+        logger.info("【联动115追更】开始检查追更记录：原因=%s，插件启用=%s，追更联动=%s，来源=%s", reason, self._enabled, self._follow_enabled, self._source_username)
         if not self._enabled or not self._follow_enabled:
+            logger.info("【联动115追更】本次检查跳过：插件未启用或追更联动未打开")
             return {"seen": 0, "scheduled": 0, "skipped": 1, "errors": 0}
         self._install_share_hook()
         state = self._load_runtime_state()
         last_seen_id = self._safe_int(state.get("last_seen_id"), 0)
         latest_id = self._get_latest_history_id()
+        logger.info("【联动115追更】当前记录位置：已处理到ID=%s，数据库最新ID=%s，是否已经完成首次跳过旧记录=%s", last_seen_id, latest_id, bool(state.get("cursor_initialized", False)))
         if latest_id <= 0:
             self._record_event("INFO", "-", "未找到追更来源转存历史")
             return {"seen": 0, "scheduled": 0, "skipped": 0, "errors": 0}
@@ -386,6 +388,7 @@ class P115FollowTransfer(_PluginBase):
             self._record_event("CURSOR", "-", f"第一次启用或升级后，从当前最新位置开始：当前最新记录ID={latest_id}，以前的记录已跳过")
             return {"seen": 0, "scheduled": 0, "skipped": 1, "errors": 0}
         ids = self._get_new_history_ids(last_seen_id)
+        logger.info("【联动115追更】本次发现新增记录数量=%s，新增记录ID=%s", len(ids), ids)
         if not ids:
             if not bool(state.get("cursor_initialized", False)):
                 state["cursor_initialized"] = True
@@ -519,6 +522,7 @@ class P115FollowTransfer(_PluginBase):
         generation: Optional[int] = None,
     ) -> int:
         dirs = self._dedupe_paths(dirs)
+        logger.info("【联动115追更】准备安排整理：来源=%s，等待秒数=%s，目录=%s，原因=%s", source, max(delay_seconds, 0), dirs, reason)
         if not dirs:
             self._record_event("SKIP", "-", f"{reason}: 未配置入队目录")
             return 0
@@ -543,7 +547,9 @@ class P115FollowTransfer(_PluginBase):
         generation: int,
     ) -> None:
         if delay_seconds > 0:
+            logger.info("【联动115追更】等待 %s 秒后开始整理：来源=%s，目录=%s", delay_seconds, source, dirs)
             sleep(delay_seconds)
+        logger.info("【联动115追更】开始执行整理：来源=%s，目录=%s，原因=%s", source, dirs, reason)
         if generation != self._generation or not self._enabled:
             self._record_event("SKIP", "-", f"{reason}: 插件已重载或停用，取消入队")
             return
@@ -583,11 +589,8 @@ class P115FollowTransfer(_PluginBase):
         if self._is_debounced(source, normalized_path):
             self._record_event("SKIP", normalized_path, f"防抖窗口内重复触发: {source}")
             return False, True
-        if self._dry_run:
-            self._record_event("DRYRUN", normalized_path, f"模拟入队 {self._storage_name}: {reason}")
-            return True, False
-
         try:
+            logger.info("【联动115追更】开始处理目录：来源=%s，目标存储=%s，目录=%s，原因=%s", source, self._storage_name, normalized_path, reason)
             file_item = self._build_file_item(normalized_path)
             if not file_item:
                 self._record_event("ERROR", normalized_path, self._path_help_message(self._storage_name, normalized_path))
@@ -605,15 +608,18 @@ class P115FollowTransfer(_PluginBase):
         storage_name = self._storage_name.strip() or self.DEFAULT_STORAGE_NAME
         path_obj = Path(normalized_path)
         storagechain = self._storagechain or StorageChain()
+        logger.info("【联动115追更】正在解析目录：目标存储=%s，目录=%s", storage_name, normalized_path)
         try:
             file_item = storagechain.get_file_item(storage=storage_name, path=path_obj)
             if file_item:
+                logger.info("【联动115追更】StorageChain 解析目录成功：storage=%s，path=%s，fileid=%s", getattr(file_item, "storage", None), getattr(file_item, "path", None), getattr(file_item, "fileid", None))
                 return file_item
         except Exception as err:
             logger.debug("【联动115追更】StorageChain.get_file_item 失败: storage=%s path=%s err=%s", storage_name, normalized_path, err)
 
         if storage_name != "local":
             name = path_obj.name or normalized_path.strip("/") or normalized_path
+            logger.info("【联动115追更】StorageChain 没有返回目录信息，改用固定目录方式交给 MP：storage=%s，path=%s", storage_name, normalized_path)
             return FileItem(
                 storage=storage_name,
                 type="dir",
@@ -846,7 +852,7 @@ class P115FollowTransfer(_PluginBase):
         self.update_config({
             "enabled": self._enabled,
             "onlyonce": self._onlyonce,
-            "dry_run": self._dry_run,
+            "dry_run": False,
             "cron": self._cron,
             "source_username": self._source_username,
             "first_run_ignore_existing": self._first_run_ignore_existing,
