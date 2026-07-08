@@ -98,9 +98,13 @@ class UIConfig:
                              'content': [{'component': 'VSwitch', 'props': {'model': 'notify', 'label': '发送通知'}}]},
                             {'component': 'VCol', 'props': {'cols': 12, 'md': 2},
                              'content': [{'component': 'VSwitch', 'props': {'model': 'block_system_subscribe', 'label': '屏蔽系统订阅'}}]},
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 3},
+                             'content': [{'component': 'VSwitch', 'props': {'model': 'block_mp_subscribe_download', 'label': '屏蔽时阻断MP站点订阅下载',
+                                 'hint': '开启后，仅在屏蔽系统订阅时阻断MP原生订阅从馒头/彩虹岛/UBits等站点下载；手动下载和取消屏蔽窗口不受影响',
+                                 'persistent-hint': True}}]},
                             {'component': 'VCol', 'props': {'cols': 12, 'md': 2},
                              'content': [{'component': 'VSwitch', 'props': {'model': 'onlyonce', 'label': '立即运行'}}]},
-                            {'component': 'VCol', 'props': {'cols': 12, 'md': 4},
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 3},
                              'content': [{
                                  'component': 'VCronField',
                                  'props': {
@@ -511,6 +515,7 @@ class UIConfig:
             "exclude_subscribes": [],
             "include_subscribes": [],
             "block_system_subscribe": False,
+            "block_mp_subscribe_download": False,
             "max_transfer_per_sync": 50,
             "batch_size": 20,
             "skip_other_season_dirs": True

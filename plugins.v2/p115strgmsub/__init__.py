@@ -19,7 +19,7 @@ from app.db.subscribe_oper import SubscribeOper
 from app.db.models.site import Site
 from app.log import logger
 from app.plugins import _PluginBase
-from app.schemas.types import EventType, MediaType, NotificationType
+from app.schemas.types import ChainEventType, EventType, MediaType, NotificationType
 
 from .clients import PanSouClient, P115ClientManager, NullbrClient, HDHiveOpenAPIClient, HDHiveOpenAPIError
 from .handlers import SearchHandler, SyncHandler, SubscribeHandler, ApiHandler
@@ -39,7 +39,7 @@ class P115StrgmSub(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "1.6.6"
+    plugin_version = "1.6.7"
     # 插件作者
     plugin_author = "umefigub149"
     # 作者主页
@@ -104,6 +104,8 @@ class P115StrgmSub(_PluginBase):
 
     # 是否屏蔽系统订阅（True=已屏蔽系统订阅，False=已恢复系统订阅）
     _block_system_subscribe: bool = False
+    # 屏蔽系统订阅时，阻断 MoviePilot 原生站点订阅下载，防止新增订阅抢跑
+    _block_mp_subscribe_download: bool = False
 
     _max_transfer_per_sync: int = 50
     _batch_size: int = 20
@@ -294,6 +296,82 @@ class P115StrgmSub(_PluginBase):
                 subscribe_oper.update(s.id, {"sites": site_ids})
                 updated += 1
         logger.info(f"{reason}：已更新 {updated} 个订阅（跳过 {excluded} 个排除订阅）")
+
+    # ------------------ MP 原生订阅下载拦截 ------------------
+
+    @staticmethod
+    def _is_mp_subscribe_origin(origin: Any) -> bool:
+        if origin is None:
+            return False
+        origin_text = str(origin).strip()
+        return origin_text == "Subscribe" or origin_text.startswith("Subscribe|")
+
+    @staticmethod
+    def _extract_subscribe_id_from_origin(origin: Any) -> str:
+        origin_text = str(origin or "")
+        if not origin_text.startswith("Subscribe|"):
+            return "-"
+        raw_payload = origin_text.split("|", 1)[1]
+        try:
+            import json
+            payload = json.loads(raw_payload)
+            subscribe_id = payload.get("id") or payload.get("subscribe_id")
+            return str(subscribe_id) if subscribe_id is not None else "-"
+        except Exception:
+            return "-"
+
+    @staticmethod
+    def _extract_context_site_name(context: Any) -> str:
+        candidates: List[Any] = []
+        torrent_info = getattr(context, "torrent_info", None)
+        if torrent_info:
+            candidates.extend([
+                getattr(torrent_info, "site_name", None),
+                getattr(torrent_info, "site", None),
+                getattr(torrent_info, "site_id", None),
+                getattr(torrent_info, "site_order", None),
+            ])
+        candidates.extend([
+            getattr(context, "site_name", None),
+            getattr(context, "site", None),
+            getattr(context, "site_id", None),
+        ])
+        for item in candidates:
+            if item is not None and str(item).strip():
+                return str(item).strip()
+        return "未知站点"
+
+    @staticmethod
+    def _extract_context_title(context: Any) -> str:
+        torrent_info = getattr(context, "torrent_info", None)
+        if torrent_info:
+            for attr in ["title", "name", "subtitle", "description"]:
+                value = getattr(torrent_info, attr, None)
+                if value:
+                    return str(value).replace("\n", " ")[:180]
+        media_info = getattr(context, "media_info", None)
+        if media_info:
+            for attr in ["title", "title_year", "original_title"]:
+                value = getattr(media_info, attr, None)
+                if value:
+                    return str(value).replace("\n", " ")[:180]
+        return "未知资源"
+
+    @staticmethod
+    def _is_115_site_name(site_name: str) -> bool:
+        text = str(site_name or "").strip().lower()
+        return text in {"115", "115网盘", "-1"} or "115网盘" in text
+
+    def _should_block_mp_subscribe_download(self, origin: Any) -> Tuple[bool, str]:
+        if not self._enabled:
+            return False, "插件未启用"
+        if not self._block_mp_subscribe_download:
+            return False, "开关未开启"
+        if not self._block_system_subscribe:
+            return False, "当前未屏蔽系统订阅"
+        if not self._is_mp_subscribe_origin(origin):
+            return False, "来源不是MP订阅"
+        return True, "屏蔽系统订阅中"
 
     # ------------------ 禁用窗口判断 ------------------
 
@@ -754,6 +832,9 @@ class P115StrgmSub(_PluginBase):
             )
 
             self._block_system_subscribe = bool(config.get("block_system_subscribe", False))
+            self._block_mp_subscribe_download = bool(config.get("block_mp_subscribe_download", False))
+            if self._block_mp_subscribe_download:
+                logger.info("【P115订阅防抢跑】已开启：屏蔽系统订阅时阻断MP原生站点订阅下载")
             self._auto_search_new_subscribe = bool(config.get("auto_search_new_subscribe", False))
             try:
                 self._auto_search_new_subscribe_delay_seconds = max(0, int(config.get("auto_search_new_subscribe_delay_seconds", 60) or 0))
@@ -1011,6 +1092,7 @@ class P115StrgmSub(_PluginBase):
             "exclude_subscribes": self._exclude_subscribes,
             "include_subscribes": self._include_subscribes,
             "block_system_subscribe": self._block_system_subscribe,
+            "block_mp_subscribe_download": self._block_mp_subscribe_download,
             "auto_search_new_subscribe": self._auto_search_new_subscribe,
             "auto_search_new_subscribe_delay_seconds": self._auto_search_new_subscribe_delay_seconds,
             "max_transfer_per_sync": self._max_transfer_per_sync,
@@ -1296,6 +1378,88 @@ class P115StrgmSub(_PluginBase):
 
     def api_list_directories(self, path: str = "/", apikey: str = "") -> dict:
         return self._api_handler.list_directories(path, apikey)
+
+    @eventmanager.register(etype=ChainEventType.ResourceSelection, priority=1)
+    def block_mp_subscribe_resource_selection(self, event: Event):
+        if not event or not event.event_data:
+            return
+
+        event_data = event.event_data
+        origin = getattr(event_data, "origin", None)
+        should_block, reason = self._should_block_mp_subscribe_download(origin=origin)
+        if not should_block:
+            logger.debug(f"【P115订阅防抢跑】资源选择阶段放行：{reason}，来源={origin}")
+            return
+
+        contexts = getattr(event_data, "contexts", None) or []
+        if not contexts:
+            logger.info(f"【P115订阅防抢跑】资源选择阶段：来源={origin} 没有候选资源，无需处理")
+            return
+
+        kept_contexts: List[Any] = []
+        blocked_titles: List[str] = []
+        blocked_sites: Set[str] = set()
+        for context in contexts:
+            site_name = self._extract_context_site_name(context)
+            if self._is_115_site_name(site_name):
+                kept_contexts.append(context)
+                continue
+            blocked_sites.add(site_name)
+            blocked_titles.append(self._extract_context_title(context))
+
+        if len(kept_contexts) == len(contexts):
+            logger.info(
+                f"【P115订阅防抢跑】资源选择阶段放行：订阅来源仅包含115资源，"
+                f"来源={origin}，候选={len(contexts)}"
+            )
+            return
+
+        event_data.updated = True
+        event_data.updated_contexts = kept_contexts
+        event_data.source = self.plugin_name
+        subscribe_id = self._extract_subscribe_id_from_origin(origin)
+        sample_titles = "；".join(blocked_titles[:3])
+        if len(blocked_titles) > 3:
+            sample_titles = f"{sample_titles}；等{len(blocked_titles)}个"
+        logger.warning(
+            f"【P115订阅防抢跑】资源选择阶段已过滤MP站点订阅资源："
+            f"订阅ID={subscribe_id}，来源={origin}，过滤={len(contexts) - len(kept_contexts)}，"
+            f"保留115资源={len(kept_contexts)}，站点={', '.join(sorted(blocked_sites)) or '未知站点'}，"
+            f"资源={sample_titles or '无标题'}"
+        )
+
+    @eventmanager.register(etype=ChainEventType.ResourceDownload, priority=1)
+    def block_mp_subscribe_resource_download(self, event: Event):
+        if not event or not event.event_data:
+            return
+
+        event_data = event.event_data
+        if getattr(event_data, "cancel", False):
+            return
+
+        origin = getattr(event_data, "origin", None)
+        should_block, reason = self._should_block_mp_subscribe_download(origin=origin)
+        if not should_block:
+            logger.debug(f"【P115订阅防抢跑】下载阶段放行：{reason}，来源={origin}")
+            return
+
+        context = getattr(event_data, "context", None)
+        site_name = self._extract_context_site_name(context)
+        title = self._extract_context_title(context)
+        if self._is_115_site_name(site_name):
+            logger.info(
+                f"【P115订阅防抢跑】下载阶段放行115资源：来源={origin}，站点={site_name}，资源={title}"
+            )
+            return
+
+        subscribe_id = self._extract_subscribe_id_from_origin(origin)
+        event_data.cancel = True
+        event_data.source = self.plugin_name
+        event_data.reason = "屏蔽系统订阅中，已阻断MP原生站点订阅下载"
+        logger.warning(
+            f"【P115订阅防抢跑】下载阶段已阻断MP原生站点订阅下载："
+            f"订阅ID={subscribe_id}，来源={origin}，站点={site_name}，资源={title}"
+        )
 
     @eventmanager.register(EventType.PluginAction)
     def remote_sync(self, event: Event):
