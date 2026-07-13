@@ -39,7 +39,7 @@ class P115StrgmSub(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "1.6.8"
+    plugin_version = "1.6.9"
     # 插件作者
     plugin_author = "umefigub149"
     # 作者主页
@@ -123,6 +123,10 @@ class P115StrgmSub(_PluginBase):
 
     # 禁用定期搜索：开启后不注册 cron 定时全量同步服务，仅保留新增订阅自动搜索和手动触发
     _disable_periodic_sync: bool = False
+
+    # 临时站点记录：新增订阅自动搜索前把站点临时设为仅115，搜索完成后恢复
+    _new_subscribe_temp_sites: Dict[int, Any] = {}
+
     _new_subscribe_search_lock: Lock = Lock()
     _new_subscribe_pending: Set[int] = set()
     _new_subscribe_running: Set[int] = set()
@@ -571,8 +575,9 @@ class P115StrgmSub(_PluginBase):
     @eventmanager.register(EventType.SubscribeAdded)
     def on_subscribe_added(self, event: Event):
         """
-        保留：新订阅兜底
-        - 已屏蔽系统订阅时：新订阅必拉回仅115
+        保留：新订阅兜底 + 新增订阅自动搜索临时屏蔽PT站点
+        - 新增订阅自动搜索开启时：临时把站点设为仅115（阻止MP PT抢跑），搜完恢复
+        - 已屏蔽系统订阅时：新订阅拉回仅115（永久保持）
         - 已恢复系统订阅时：新订阅同步窗口站点（保持一致）
         """
         sid = self._get_subscribe_id_from_event(event)
@@ -584,11 +589,25 @@ class P115StrgmSub(_PluginBase):
         try:
             self._init_subscribe_handler()
 
-            if self._block_system_subscribe:
+            # 新增订阅自动搜索开启时：不管屏蔽状态，先临时屏蔽PT站点
+            if self._auto_search_new_subscribe:
+                # 保存原始站点（用于搜完恢复）
+                if not self._block_system_subscribe:
+                    with SessionFactory() as db:
+                        subscribe = SubscribeOper(db=db).get(sid)
+                        if subscribe:
+                            original_sites = getattr(subscribe, 'sites', None)
+                            # 只在原始站点不是纯115时才保存（已经是仅115的不用恢复）
+                            raw = str(original_sites or '')
+                            if raw not in ('[-1]', '-1', '[]', ''):
+                                self._new_subscribe_temp_sites[sid] = original_sites
+                                logger.info(f"新增订阅自动搜索：已保存原始站点（subscribe_id={sid}），搜索完成后恢复")
+                self._subscribe_handler.set_sites_for_subscribe_only_115(sid)
+                logger.info(f"新增订阅自动搜索：已临时屏蔽PT站点（subscribe_id={sid}），防止MP抢跑下载")
+            elif self._block_system_subscribe:
                 if hasattr(self._subscribe_handler, "set_sites_for_subscribe_only_115"):
                     self._subscribe_handler.set_sites_for_subscribe_only_115(sid)
                 else:
-                    # 兜底：使用统一的 db session
                     with SessionFactory() as db:
                         site_id_115 = self._ensure_115_site_id(db)
                         SubscribeOper(db=db).update(sid, {"sites": [site_id_115]})
@@ -669,69 +688,81 @@ class P115StrgmSub(_PluginBase):
                 self._new_subscribe_running.discard(sid)
 
     def _search_new_subscribe_now(self, sid: int) -> bool:
-        """只搜索一个新增订阅，复用原有单订阅处理函数，不跑全量同步。"""
-        if not self._enabled:
-            logger.info(f"新增订阅自动搜索停止：插件已关闭（subscribe_id={sid}）")
-            return False
-        if not self._pansou_enabled and not self._nullbr_enabled and not self._hdhive_enabled:
-            logger.error(f"新增订阅自动搜索失败：搜索源均未启用（subscribe_id={sid}）")
-            return False
-        if not self._p115_manager:
-            logger.error(f"新增订阅自动搜索失败：115 客户端未初始化（subscribe_id={sid}）")
-            return False
-        if not self._p115_manager.check_login():
-            logger.error(f"新增订阅自动搜索失败：115 登录失败，Cookie 可能已过期（subscribe_id={sid}）")
-            return False
+        """只搜索一个新增订阅，复用原有单订阅处理函数，不跑全量同步。
+        搜索完成后自动恢复因 auto_search 临时屏蔽的 PT 站点。"""
+        try:
+            if not self._enabled:
+                logger.info(f"新增订阅自动搜索停止：插件已关闭（subscribe_id={sid}）")
+                return False
+            if not self._pansou_enabled and not self._nullbr_enabled and not self._hdhive_enabled:
+                logger.error(f"新增订阅自动搜索失败：搜索源均未启用（subscribe_id={sid}）")
+                return False
+            if not self._p115_manager:
+                logger.error(f"新增订阅自动搜索失败：115 客户端未初始化（subscribe_id={sid}）")
+                return False
+            if not self._p115_manager.check_login():
+                logger.error(f"新增订阅自动搜索失败：115 登录失败，Cookie 可能已过期（subscribe_id={sid}）")
+                return False
 
-        self._init_handlers()
-        with SessionFactory() as db:
-            subscribe = SubscribeOper(db=db).get(sid)
+            self._init_handlers()
+            with SessionFactory() as db:
+                subscribe = SubscribeOper(db=db).get(sid)
 
-        if not subscribe:
-            logger.warning(f"新增订阅自动搜索停止：订阅不存在或已删除（subscribe_id={sid}）")
-            return False
-        if self._is_subscribe_excluded(subscribe.id):
-            logger.info(f"新增订阅自动搜索跳过：订阅不在本插件处理范围（subscribe_id={subscribe.id}，标题={subscribe.name}）")
-            return False
+            if not subscribe:
+                logger.warning(f"新增订阅自动搜索停止：订阅不存在或已删除（subscribe_id={sid}）")
+                return False
+            if self._is_subscribe_excluded(subscribe.id):
+                logger.info(f"新增订阅自动搜索跳过：订阅不在本插件处理范围（subscribe_id={subscribe.id}，标题={subscribe.name}）")
+                return False
 
-        logger.info(
-            f"开始搜索新增订阅：订阅ID={subscribe.id}，标题={subscribe.name}，年份={subscribe.year}，"
-            f"类型={subscribe.type}，季={subscribe.season or 1}，缺失集数={getattr(subscribe, 'lack_episode', None)}"
-        )
-
-        history: List[dict] = self.get_data('history') or []
-        transfer_details: List[Dict[str, Any]] = []
-        transferred_count = 0
-        before_count = transferred_count
-
-        if subscribe.type == MediaType.MOVIE.value:
-            transferred_count = self._sync_handler.process_movie_subscribe(
-                subscribe=subscribe,
-                history=history,
-                transfer_details=transfer_details,
-                transferred_count=transferred_count,
+            logger.info(
+                f"开始搜索新增订阅：订阅ID={subscribe.id}，标题={subscribe.name}，年份={subscribe.year}，"
+                f"类型={subscribe.type}，季={subscribe.season or 1}，缺失集数={getattr(subscribe, 'lack_episode', None)}"
             )
-        elif subscribe.type == MediaType.TV.value:
-            transferred_count = self._sync_handler.process_tv_subscribe(
-                subscribe=subscribe,
-                history=history,
-                transfer_details=transfer_details,
-                transferred_count=transferred_count,
-                exclude_ids=set(self._exclude_subscribes or []),
-            )
-        else:
-            logger.info(f"新增订阅自动搜索跳过：暂不支持的订阅类型 {subscribe.type}（subscribe_id={subscribe.id}）")
-            return False
 
-        self.save_data('history', history)
-        delta = transferred_count - before_count
-        if delta > 0:
-            logger.info(f"新增订阅自动搜索完成：订阅ID={subscribe.id}，标题={subscribe.name}，新增转存数量={delta}")
-            if self._notify and transfer_details:
-                self._sync_handler.send_transfer_notification(transfer_details, transferred_count)
-        else:
-            logger.info(f"新增订阅自动搜索完成：订阅ID={subscribe.id}，标题={subscribe.name}，本次未找到可转存资源")
-        return True
+            history: List[dict] = self.get_data('history') or []
+            transfer_details: List[Dict[str, Any]] = []
+            transferred_count = 0
+            before_count = transferred_count
+
+            if subscribe.type == MediaType.MOVIE.value:
+                transferred_count = self._sync_handler.process_movie_subscribe(
+                    subscribe=subscribe,
+                    history=history,
+                    transfer_details=transfer_details,
+                    transferred_count=transferred_count,
+                )
+            elif subscribe.type == MediaType.TV.value:
+                transferred_count = self._sync_handler.process_tv_subscribe(
+                    subscribe=subscribe,
+                    history=history,
+                    transfer_details=transfer_details,
+                    transferred_count=transferred_count,
+                    exclude_ids=set(self._exclude_subscribes or []),
+                )
+            else:
+                logger.info(f"新增订阅自动搜索跳过：暂不支持的订阅类型 {subscribe.type}（subscribe_id={subscribe.id}）")
+                return False
+
+            self.save_data('history', history)
+            delta = transferred_count - before_count
+            if delta > 0:
+                logger.info(f"新增订阅自动搜索完成：订阅ID={subscribe.id}，标题={subscribe.name}，新增转存数量={delta}")
+                if self._notify and transfer_details:
+                    self._sync_handler.send_transfer_notification(transfer_details, transferred_count)
+            else:
+                logger.info(f"新增订阅自动搜索完成：订阅ID={subscribe.id}，标题={subscribe.name}，本次未找到可转存资源")
+            return True
+        finally:
+            # 恢复因 auto_search 临时屏蔽的 PT 站点
+            original_sites = self._new_subscribe_temp_sites.pop(sid, None)
+            if original_sites is not None and not self._block_system_subscribe:
+                try:
+                    with SessionFactory() as db:
+                        SubscribeOper(db=db).update(sid, {"sites": original_sites})
+                    logger.info(f"新增订阅自动搜索：已恢复原始站点（subscribe_id={sid}）")
+                except Exception as e:
+                    logger.error(f"新增订阅自动搜索：恢复站点失败（subscribe_id={sid}）：{e}")
 
     @eventmanager.register(EventType.SubscribeModified)
     def on_subscribe_modified(self, event: Event):
