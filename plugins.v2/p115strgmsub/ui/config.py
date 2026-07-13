@@ -159,6 +159,38 @@ class UIConfig:
                             }
                         ]
                     },
+                    # 禁用定期搜索
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 4},
+                                'content': [{
+                                    'component': 'VSwitch',
+                                    'props': {
+                                        'model': 'disable_periodic_sync',
+                                        'label': '禁用定期搜索',
+                                        'hint': '开启后不再按 Cron 定时全量搜索所有订阅，仅保留新增订阅自动搜索和手动触发（立即运行/远程命令/API）',
+                                        'persistent-hint': True
+                                    }
+                                }]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 8},
+                                'content': [{
+                                    'component': 'VAlert',
+                                    'props': {
+                                        'type': 'info',
+                                        'variant': 'tonal',
+                                        'density': 'compact',
+                                        'text': '适合只想在新增订阅时自动搜索115资源、不需要定期全量扫描的场景。开启后 Cron 执行周期配置将被忽略。'
+                                    }
+                                }]
+                            }
+                        ]
+                    },
 
                     # 取消屏蔽后的站点选择/窗口期/延迟分钟（1.2.4 语义同步）
                     {
@@ -479,6 +511,7 @@ class UIConfig:
             "unblock_delay_minutes": 5,
             "auto_search_new_subscribe": False,
             "auto_search_new_subscribe_delay_seconds": 60,
+            "disable_periodic_sync": False,
 
             "save_path": "/我的接收/MoviePilot/TV",
             "movie_save_path": "/我的接收/MoviePilot/Movie",

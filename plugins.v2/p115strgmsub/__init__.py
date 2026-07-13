@@ -39,7 +39,7 @@ class P115StrgmSub(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "1.6.7"
+    plugin_version = "1.6.8"
     # 插件作者
     plugin_author = "umefigub149"
     # 作者主页
@@ -120,6 +120,9 @@ class P115StrgmSub(_PluginBase):
     # 新增订阅自动搜索：只防正在等待/运行的重复排队，不永久限制同一订阅
     _auto_search_new_subscribe: bool = False
     _auto_search_new_subscribe_delay_seconds: int = 60
+
+    # 禁用定期搜索：开启后不注册 cron 定时全量同步服务，仅保留新增订阅自动搜索和手动触发
+    _disable_periodic_sync: bool = False
     _new_subscribe_search_lock: Lock = Lock()
     _new_subscribe_pending: Set[int] = set()
     _new_subscribe_running: Set[int] = set()
@@ -840,6 +843,7 @@ class P115StrgmSub(_PluginBase):
                 self._auto_search_new_subscribe_delay_seconds = max(0, int(config.get("auto_search_new_subscribe_delay_seconds", 60) or 0))
             except Exception:
                 self._auto_search_new_subscribe_delay_seconds = 60
+            self._disable_periodic_sync = bool(config.get("disable_periodic_sync", False))
 
         # 初始化客户端/handlers
         self._init_clients()
@@ -1095,6 +1099,7 @@ class P115StrgmSub(_PluginBase):
             "block_mp_subscribe_download": self._block_mp_subscribe_download,
             "auto_search_new_subscribe": self._auto_search_new_subscribe,
             "auto_search_new_subscribe_delay_seconds": self._auto_search_new_subscribe_delay_seconds,
+            "disable_periodic_sync": self._disable_periodic_sync,
             "max_transfer_per_sync": self._max_transfer_per_sync,
             "batch_size": self._batch_size,
             "skip_other_season_dirs": self._skip_other_season_dirs,
@@ -1172,6 +1177,11 @@ class P115StrgmSub(_PluginBase):
 
     def get_service(self) -> List[Dict[str, Any]]:
         if not self._enabled:
+            return []
+
+        # 用户选择禁用定期搜索：不注册 cron 定时服务，仅保留新增订阅自动搜索和手动触发
+        if self._disable_periodic_sync:
+            logger.info("已禁用定期搜索（disable_periodic_sync=True）：不注册 cron 定时全量同步服务")
             return []
 
         services = []
