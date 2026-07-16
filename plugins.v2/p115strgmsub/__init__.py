@@ -4,7 +4,7 @@
 """
 import datetime
 from pathlib import Path
-from threading import Lock, Thread
+from threading import Lock, Thread, enumerate as threading_enumerate
 from typing import Optional, Any, List, Dict, Tuple, Set
 
 import pytz
@@ -39,7 +39,7 @@ class P115StrgmSub(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "1.6.11"
+    plugin_version = "1.6.12"
     # 插件作者
     plugin_author = "umefigub149"
     # 作者主页
@@ -379,13 +379,18 @@ class P115StrgmSub(_PluginBase):
         # 屏蔽系统订阅：全局阻断
         if self._block_system_subscribe:
             return True, "屏蔽系统订阅中"
-        # 新增订阅自动搜索：只阻断正在 auto_search 窗口内的订阅
+        # 新增订阅自动搜索：以 pending/running 为权威窗口
+        # temp_sites 只是附加标记，不能单独依赖（原站点已是仅115时不会写入）
         if self._auto_search_new_subscribe:
             sid_str = self._extract_subscribe_id_from_origin(origin)
             try:
                 sid = int(sid_str)
+                if sid in self._new_subscribe_pending:
+                    return True, "自动搜索115资源等待中"
+                if sid in self._new_subscribe_running:
+                    return True, "自动搜索115资源执行中"
                 if sid in self._new_subscribe_temp_sites:
-                    return True, "自动搜索115资源中"
+                    return True, "自动搜索115资源保护中"
             except (ValueError, TypeError):
                 pass
         return False, "订阅不在防抢跑窗口"
@@ -596,22 +601,34 @@ class P115StrgmSub(_PluginBase):
         if self._is_subscribe_excluded(sid):
             logger.info(f"新增订阅不在本插件处理范围（订阅过滤模式：{self._subscribe_filter_mode}），跳过站点同步（subscribe_id={sid}）")
             return
+        # 尽早进入防抢跑窗口，避免 SubscribeAdded 处理期间被 MP 站点下载抢跑
+        if self._auto_search_new_subscribe and self._enabled:
+            with self._new_subscribe_search_lock:
+                self._new_subscribe_pending.add(sid)
         try:
             self._init_subscribe_handler()
 
             # 新增订阅自动搜索开启时：不管屏蔽状态，先临时屏蔽PT站点
             if self._auto_search_new_subscribe:
-                # 保存原始站点（用于搜完恢复）
+                # 无论原站点是否已是仅115，都写入 temp_sites，作为防抢跑附加标记
+                # 只有非纯115原站点才会在搜完后恢复
                 if not self._block_system_subscribe:
                     with SessionFactory() as db:
                         subscribe = SubscribeOper(db=db).get(sid)
                         if subscribe:
                             original_sites = getattr(subscribe, 'sites', None)
-                            # 只在原始站点不是纯115时才保存（已经是仅115的不用恢复）
                             raw = str(original_sites or '')
                             if raw not in ('[-1]', '-1', '[]', ''):
                                 self._new_subscribe_temp_sites[sid] = original_sites
                                 logger.info(f"新增订阅自动搜索：已保存原始站点（subscribe_id={sid}），搜索完成后恢复")
+                            else:
+                                # 占位标记：保证链事件能识别该订阅处于 auto_search 保护中
+                                self._new_subscribe_temp_sites[sid] = None
+                                logger.info(f"新增订阅自动搜索：原站点已是仅115，写入保护标记（subscribe_id={sid}）")
+                        else:
+                            self._new_subscribe_temp_sites[sid] = None
+                else:
+                    self._new_subscribe_temp_sites[sid] = None
                 self._subscribe_handler.set_sites_for_subscribe_only_115(sid)
                 logger.info(f"新增订阅自动搜索：已临时屏蔽PT站点（subscribe_id={sid}），防止MP抢跑下载")
             elif self._block_system_subscribe:
@@ -636,22 +653,37 @@ class P115StrgmSub(_PluginBase):
         """收到 MP 新增订阅事件后，后台延迟搜索这个新增订阅。"""
         if not self._auto_search_new_subscribe:
             logger.debug(f"新增订阅自动搜索未开启，跳过（subscribe_id={sid}）")
+            with self._new_subscribe_search_lock:
+                self._new_subscribe_pending.discard(sid)
             return
         if not self._enabled:
             logger.info(f"新增订阅自动搜索跳过：插件未启用（subscribe_id={sid}）")
+            with self._new_subscribe_search_lock:
+                self._new_subscribe_pending.discard(sid)
             return
         if self._is_subscribe_excluded(sid):
             logger.info(f"新增订阅自动搜索跳过：订阅不在本插件处理范围（subscribe_id={sid}）")
+            with self._new_subscribe_search_lock:
+                self._new_subscribe_pending.discard(sid)
             return
 
         with self._new_subscribe_search_lock:
-            if sid in self._new_subscribe_pending:
-                logger.info(f"新增订阅自动搜索跳过：订阅ID={sid} 已在等待搜索，避免重复排队")
-                return
+            # 已在执行中：不重复开线程
             if sid in self._new_subscribe_running:
                 logger.info(f"新增订阅自动搜索跳过：订阅ID={sid} 正在搜索中，避免重复执行")
                 return
+            # pending 可能已由 on_subscribe_added 提前写入（防抢跑窗口）
+            # 只有已有后台线程在等/跑时才跳过；这里用 running 判断即可
+            # 若重复 SubscribeAdded：允许覆盖排队，但只允许一个 running
+            already_waiting = sid in self._new_subscribe_pending
             self._new_subscribe_pending.add(sid)
+            # 若已在 pending 且已有同名线程存活，避免重复起线程
+            if already_waiting and any(
+                t.name == f"p115-new-subscribe-search-{sid}" and t.is_alive()
+                for t in threading_enumerate()
+            ):
+                logger.info(f"新增订阅自动搜索跳过：订阅ID={sid} 已在等待搜索，避免重复排队")
+                return
 
         title = None
         media_type = None
