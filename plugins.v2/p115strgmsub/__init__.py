@@ -39,7 +39,7 @@ class P115StrgmSub(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "1.6.10"
+    plugin_version = "1.6.11"
     # 插件作者
     plugin_author = "umefigub149"
     # 作者主页
@@ -376,10 +376,19 @@ class P115StrgmSub(_PluginBase):
             return False, "开关未开启"
         if not self._is_mp_subscribe_origin(origin):
             return False, "来源不是MP订阅"
-        # 自动搜索115资源 或 屏蔽系统订阅：任一激活即阻断MP站点订阅下载
-        if self._auto_search_new_subscribe or self._block_system_subscribe:
-            return True, "防抢跑已激活"
-        return False, "屏蔽系统订阅未启用且自动搜索未开启"
+        # 屏蔽系统订阅：全局阻断
+        if self._block_system_subscribe:
+            return True, "屏蔽系统订阅中"
+        # 新增订阅自动搜索：只阻断正在 auto_search 窗口内的订阅
+        if self._auto_search_new_subscribe:
+            sid_str = self._extract_subscribe_id_from_origin(origin)
+            try:
+                sid = int(sid_str)
+                if sid in self._new_subscribe_temp_sites:
+                    return True, "自动搜索115资源中"
+            except (ValueError, TypeError):
+                pass
+        return False, "订阅不在防抢跑窗口"
 
     # ------------------ 禁用窗口判断 ------------------
 
