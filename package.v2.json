@@ -23,11 +23,12 @@
     "release": true,
     "description": "结合MoviePilot订阅功能，自动搜索115网盘资源并转存缺失剧集。",
     "labels": "订阅,115网盘",
-    "version": "1.6.9",
+    "version": "1.6.10",
     "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/cloud.png",
     "author": "umefigub149",
     "level": 1,
     "history": {
+      "v1.6.10": "修复：_should_block_mp_subscribe_download 不再强制依赖 block_system_subscribe。当 auto_search_new_subscribe=True 时直接激活防抢跑阻断，与「MP新增订阅后自动搜索115资源」开关正确绑定。",
       "v1.6.9": "方案B：新增订阅自动搜索时临时屏蔽PT站点。开启 auto_search_new_subscribe 后，新增订阅时先把站点锁定为仅115（阻止MP PT抢跑），115搜索完成后自动恢复原始PT站点。不再需要开启全局\"屏蔽系统订阅\"来防止PT抢跑。",
       "v1.6.8": "新增「禁用定期搜索」开关（disable_periodic_sync）：开启后不再按 Cron 定时全量扫描所有订阅，仅保留新增订阅自动搜索（SubscribeAdded 事件触发）和手动触发（立即运行/远程命令/API），适合只想在新增订阅时自动搜索115资源、不需要定期全量扫描的场景。",
       "v1.6.7": "新增“屏蔽时阻断MP站点订阅下载”开关：在屏蔽系统订阅状态下拦截 MoviePilot 原生订阅从馒头、彩虹岛、UBits 等站点抢跑下载，保留手动下载与取消屏蔽窗口，并输出资源选择/下载阶段的详细阻断日志。",
