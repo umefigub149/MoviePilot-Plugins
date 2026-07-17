@@ -39,7 +39,7 @@ class P115StrgmSub(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "1.6.14"
+    plugin_version = "1.6.15"
     # 插件作者
     plugin_author = "umefigub149"
     # 作者主页
@@ -124,12 +124,15 @@ class P115StrgmSub(_PluginBase):
     # 禁用定期搜索：开启后不注册 cron 定时全量同步服务，仅保留新增订阅自动搜索和手动触发
     _disable_periodic_sync: bool = False
 
-    # 临时站点记录：新增订阅自动搜索前把站点临时设为仅115，搜索完成后恢复
+    # 临时站点记录：新增订阅自动搜索前把站点临时设为仅115，搜索完成后按结果决定是否恢复
     _new_subscribe_temp_sites: Dict[int, Any] = {}
 
     _new_subscribe_search_lock: Lock = Lock()
     _new_subscribe_pending: Set[int] = set()
     _new_subscribe_running: Set[int] = set()
+    # 115 自动搜索成功后的冷却窗口：即使搜完也继续拦截 MP 站点下载，避免“115刚补齐 MP 又下”
+    _new_subscribe_cooldown_until: Dict[int, float] = {}
+    _post_success_block_seconds: int = 300
 
     # 运行时对象
     _pansou_client: Optional[PanSouClient] = None
@@ -379,8 +382,7 @@ class P115StrgmSub(_PluginBase):
         # 屏蔽系统订阅：全局阻断
         if self._block_system_subscribe:
             return True, "屏蔽系统订阅中"
-        # 新增订阅自动搜索：以 pending/running 为权威窗口
-        # temp_sites 只是附加标记，不能单独依赖（原站点已是仅115时不会写入）
+        # 新增订阅自动搜索：以 pending/running/cooldown/temp_sites 为权威窗口
         if self._auto_search_new_subscribe:
             sid_str = self._extract_subscribe_id_from_origin(origin)
             try:
@@ -391,6 +393,16 @@ class P115StrgmSub(_PluginBase):
                     return True, "自动搜索115资源执行中"
                 if sid in self._new_subscribe_temp_sites:
                     return True, "自动搜索115资源保护中"
+                # 成功转存后的冷却：挡住“115刚完成，MP立刻PT下载”
+                import time
+                until = float(self._new_subscribe_cooldown_until.get(sid) or 0)
+                if until > 0:
+                    now = time.time()
+                    if now < until:
+                        left = int(until - now)
+                        return True, f"115搜索完成后冷却保护中(剩余{left}s)"
+                    # 过期清理
+                    self._new_subscribe_cooldown_until.pop(sid, None)
             except (ValueError, TypeError):
                 pass
         return False, "订阅不在防抢跑窗口"
@@ -731,7 +743,14 @@ class P115StrgmSub(_PluginBase):
 
     def _search_new_subscribe_now(self, sid: int) -> bool:
         """只搜索一个新增订阅，复用原有单订阅处理函数，不跑全量同步。
-        搜索完成后自动恢复因 auto_search 临时屏蔽的 PT 站点。"""
+
+        完成后策略：
+        - 若 115 成功转存：不恢复 PT 站点，并进入冷却窗口继续拦截 MP 下载
+        - 若 115 无结果：恢复原始站点，让 MP 正常补下
+        """
+        import time
+        transferred_delta = 0
+        search_ok = False
         try:
             if not self._enabled:
                 logger.info(f"新增订阅自动搜索停止：插件已关闭（subscribe_id={sid}）")
@@ -787,24 +806,100 @@ class P115StrgmSub(_PluginBase):
                 return False
 
             self.save_data('history', history)
-            delta = transferred_count - before_count
-            if delta > 0:
-                logger.info(f"新增订阅自动搜索完成：订阅ID={subscribe.id}，标题={subscribe.name}，新增转存数量={delta}")
+            transferred_delta = transferred_count - before_count
+            search_ok = True
+            if transferred_delta > 0:
+                logger.info(f"新增订阅自动搜索完成：订阅ID={subscribe.id}，标题={subscribe.name}，新增转存数量={transferred_delta}")
                 if self._notify and transfer_details:
                     self._sync_handler.send_transfer_notification(transfer_details, transferred_count)
             else:
                 logger.info(f"新增订阅自动搜索完成：订阅ID={subscribe.id}，标题={subscribe.name}，本次未找到可转存资源")
             return True
         finally:
-            # 恢复因 auto_search 临时屏蔽的 PT 站点
+            # 先清 temp_sites，再按结果决定：成功则冷却拦截，失败才恢复 PT
             original_sites = self._new_subscribe_temp_sites.pop(sid, None)
-            if original_sites is not None and not self._block_system_subscribe:
+            cooldown_sec = max(int(self._post_success_block_seconds or 0), 0)
+
+            if search_ok and transferred_delta > 0:
+                # 115 已成功：先保持仅115 + 冷却，挡住“刚补齐 MP 立刻下”
+                if cooldown_sec > 0:
+                    self._new_subscribe_cooldown_until[sid] = time.time() + cooldown_sec
+                # 判断是否还需 MP 补缺
+                still_need_mp = False
                 try:
                     with SessionFactory() as db:
-                        SubscribeOper(db=db).update(sid, {"sites": original_sites})
-                    logger.info(f"新增订阅自动搜索：已恢复原始站点（subscribe_id={sid}）")
-                except Exception as e:
-                    logger.error(f"新增订阅自动搜索：恢复站点失败（subscribe_id={sid}）：{e}")
+                        sub = SubscribeOper(db=db).get(sid)
+                        if sub is not None:
+                            lack = getattr(sub, "lack_episode", None)
+                            # lack is None / 0 => 视为已补齐或不需要
+                            if lack is not None and int(lack) > 0:
+                                still_need_mp = True
+                except Exception:
+                    still_need_mp = False
+
+                if still_need_mp and original_sites is not None and not self._block_system_subscribe:
+                    logger.info(
+                        f"新增订阅自动搜索：115已成功转存 {transferred_delta} 项但仍有缺失，"
+                        f"冷却 {cooldown_sec}s 后恢复原始站点以便MP补缺（subscribe_id={sid}）"
+                    )
+                    # 延迟恢复，冷却期内继续拦截
+                    def _delayed_restore(_sid=sid, _sites=original_sites, _delay=cooldown_sec):
+                        import time as _t
+                        if _delay > 0:
+                            _t.sleep(_delay)
+                        try:
+                            with SessionFactory() as db:
+                                sub2 = SubscribeOper(db=db).get(_sid)
+                                if not sub2:
+                                    logger.info(
+                                        f"新增订阅自动搜索：冷却结束但订阅已完成/不存在，跳过恢复站点（subscribe_id={_sid}）"
+                                    )
+                                    return
+                                lack2 = getattr(sub2, "lack_episode", None)
+                                if lack2 is not None and int(lack2) <= 0:
+                                    logger.info(
+                                        f"新增订阅自动搜索：冷却结束且已无缺失，保持仅115（subscribe_id={_sid}）"
+                                    )
+                                    return
+                                if not self._block_system_subscribe:
+                                    SubscribeOper(db=db).update(_sid, {"sites": _sites})
+                                    logger.info(
+                                        f"新增订阅自动搜索：冷却结束，已恢复原始站点供MP补缺（subscribe_id={_sid}）"
+                                    )
+                        except Exception as e:
+                            logger.error(f"新增订阅自动搜索：延迟恢复站点失败（subscribe_id={_sid}）：{e}")
+                        finally:
+                            self._new_subscribe_cooldown_until.pop(_sid, None)
+
+                    Thread(
+                        target=_delayed_restore,
+                        name=f"p115-restore-sites-{sid}",
+                        daemon=True,
+                    ).start()
+                else:
+                    logger.info(
+                        f"新增订阅自动搜索：115已成功转存 {transferred_delta} 项，"
+                        f"保持仅115"
+                        f"{f'并进入冷却 {cooldown_sec}s' if cooldown_sec > 0 else ''}，"
+                        f"阻止MP站点下载（subscribe_id={sid}）"
+                    )
+            else:
+                # 无结果/失败：恢复原始站点，让 MP 正常补下
+                if original_sites is not None and not self._block_system_subscribe:
+                    try:
+                        with SessionFactory() as db:
+                            # 订阅可能已完成并移入历史，更新失败时忽略
+                            sub = SubscribeOper(db=db).get(sid)
+                            if sub:
+                                SubscribeOper(db=db).update(sid, {"sites": original_sites})
+                                logger.info(f"新增订阅自动搜索：本次无115成果，已恢复原始站点（subscribe_id={sid}）")
+                            else:
+                                logger.info(
+                                    f"新增订阅自动搜索：订阅已不存在/已完成，跳过恢复站点（subscribe_id={sid}）"
+                                )
+                    except Exception as e:
+                        logger.error(f"新增订阅自动搜索：恢复站点失败（subscribe_id={sid}）：{e}")
+                # 失败路径不设冷却，避免挡住 MP 正常下载
 
     @eventmanager.register(EventType.SubscribeModified)
     def on_subscribe_modified(self, event: Event):
