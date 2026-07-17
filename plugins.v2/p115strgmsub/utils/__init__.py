@@ -3,6 +3,8 @@
 包含文件匹配、通用工具等
 """
 from .file_matcher import FileMatcher, SubscribeFilter
+from .resource_title_parser import ParsedResourceTitle, ResourceTitleParser, estimate_resource_episode_span
+from .resource_ranker import ResourceRanker, ScoreContext, sort_share_resources
 from .tools import (
     download_so_file,
     get_hdhive_token_info,
@@ -11,13 +13,17 @@ from .tools import (
     convert_nullbr_to_pansou_format,
     convert_hdhive_to_pansou_format,
     get_hdhive_extension_filename,
-    estimate_resource_episode_span,
-    sort_share_resources,
 )
 
 __all__ = [
     "FileMatcher",
     "SubscribeFilter",
+    "ParsedResourceTitle",
+    "ResourceTitleParser",
+    "estimate_resource_episode_span",
+    "ResourceRanker",
+    "ScoreContext",
+    "sort_share_resources",
     "download_so_file",
     "get_hdhive_token_info",
     "check_hdhive_cookie_valid",
@@ -25,6 +31,4 @@ __all__ = [
     "convert_nullbr_to_pansou_format",
     "convert_hdhive_to_pansou_format",
     "get_hdhive_extension_filename",
-    "estimate_resource_episode_span",
-    "sort_share_resources",
 ]

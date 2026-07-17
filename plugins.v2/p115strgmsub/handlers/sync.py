@@ -138,7 +138,9 @@ class SyncHandler:
             # 搜索网盘资源
             p115_results = self._search_handler.search_resources(
                 mediainfo=mediainfo,
-                media_type=MediaType.MOVIE
+                media_type=MediaType.MOVIE,
+                is_best_version=is_best_version,
+                history_score_movie=movie_history_score if movie_history_score >= 0 else None,
             )
 
             if not p115_results:
@@ -542,12 +544,16 @@ class SyncHandler:
 
                 logger.info(f"[{source.upper()}] 开始搜索 {mediainfo.title} S{season}（当前缺失: {len(missing_episodes)} 集）")
 
-                # 搜索当前源
+                # 搜索当前源（传入缺失集/洗版上下文，供 HDHive 评分排序闭环）
                 p115_results = self._search_handler.search_single_source(
                     source=source,
                     mediainfo=mediainfo,
                     media_type=MediaType.TV,
-                    season=season
+                    season=season,
+                    missing_episodes=set(missing_episodes or set()),
+                    total_episode=getattr(subscribe, "total_episode", None),
+                    is_best_version=is_best_version,
+                    history_score_by_ep=dict(episode_history_scores or {}),
                 )
 
                 if not p115_results:
@@ -562,12 +568,24 @@ class SyncHandler:
 
                 # 遍历搜索结果
                 for resource in p115_results:
+                    if not missing_episodes:
+                        logger.info(
+                            f"【资源闭环】{mediainfo.title} S{season} 缺失集已补齐，停止后续资源包"
+                        )
+                        break
                     if transferred_count >= self._max_transfer_per_sync:
                         logger.info(f"已达单次同步上限 {self._max_transfer_per_sync}，剩余 {len(missing_episodes)} 集将在下次同步处理")
                         break
 
                     share_url = resource.get("url", "")
                     resource_title = resource.get("title", "")
+                    expected_cover = resource.get("coverage_count")
+                    if expected_cover is not None:
+                        logger.info(
+                            f"【资源闭环】尝试包: title={resource_title[:80]} "
+                            f"expect_cover={expected_cover} span={resource.get('episode_span')} "
+                            f"reason={resource.get('rank_reason', '')}"
+                        )
 
                     # 检查是否是刚搜索出尚未真正解锁的延期解锁 HDHive 资源
                     if resource.get("need_unlock") and not share_url:
@@ -726,6 +744,19 @@ class SyncHandler:
                                 batch_success_episodes.append(episode)
                             else:
                                 logger.error(f"转存失败：{mediainfo.title} S{season:02d}E{episode:02d}")
+
+                        if batch_success_episodes:
+                            actual = len(batch_success_episodes)
+                            expect = resource.get("coverage_count")
+                            logger.info(
+                                f"【资源闭环】包实际命中={actual} 集"
+                                f"{'' if expect is None else f'，预期cover={expect}'}"
+                                f"，剩余缺失={len(missing_episodes)} | title={resource_title[:80]}"
+                            )
+                            if not missing_episodes:
+                                logger.info(
+                                    f"【资源闭环】{mediainfo.title} S{season} 已补齐，跳过后续资源包"
+                                )
 
                         # 记录下载历史
                         if batch_success_episodes:

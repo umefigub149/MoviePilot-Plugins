@@ -2,14 +2,20 @@
 搜索处理模块
 负责所有搜索相关逻辑：HDHive、Nullbr、PanSou
 """
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Set
 
 from app.core.config import settings
 from app.log import logger
 from app.schemas import MediaInfo
 from app.schemas.types import MediaType
 
-from ..utils import convert_nullbr_to_pansou_format, estimate_resource_episode_span, sort_share_resources
+from ..utils import (
+    convert_nullbr_to_pansou_format,
+    estimate_resource_episode_span,
+    sort_share_resources,
+    ScoreContext,
+    ResourceRanker,
+)
 
 
 class SearchHandler:
@@ -123,7 +129,12 @@ class SearchHandler:
         self,
         mediainfo: MediaInfo,
         media_type: MediaType,
-        season: Optional[int] = None
+        season: Optional[int] = None,
+        missing_episodes: Optional[Set[int]] = None,
+        total_episode: Optional[int] = None,
+        is_best_version: bool = False,
+        history_score_movie: Optional[int] = None,
+        history_score_by_ep: Optional[Dict[int, int]] = None,
     ) -> List[Dict]:
         """
         统一的资源搜索方法，支持电影和电视剧
@@ -140,7 +151,17 @@ class SearchHandler:
         sources = self.get_enabled_sources()
 
         for source in sources:
-            results = self.search_single_source(source, mediainfo, media_type, season)
+            results = self.search_single_source(
+                source,
+                mediainfo,
+                media_type,
+                season,
+                missing_episodes=missing_episodes,
+                total_episode=total_episode,
+                is_best_version=is_best_version,
+                history_score_movie=history_score_movie,
+                history_score_by_ep=history_score_by_ep,
+            )
             if results:
                 return results
             else:
@@ -156,7 +177,12 @@ class SearchHandler:
         source: str,
         mediainfo: MediaInfo,
         media_type: MediaType,
-        season: Optional[int] = None
+        season: Optional[int] = None,
+        missing_episodes: Optional[Set[int]] = None,
+        total_episode: Optional[int] = None,
+        is_best_version: bool = False,
+        history_score_movie: Optional[int] = None,
+        history_score_by_ep: Optional[Dict[int, int]] = None,
     ) -> List[Dict]:
         """
         使用指定的单一搜索源查询资源
@@ -170,7 +196,16 @@ class SearchHandler:
         if source == "nullbr":
             return self._search_nullbr(mediainfo, media_type, season)
         elif source == "hdhive":
-            return self._search_hdhive(mediainfo, media_type, season)
+            return self._search_hdhive(
+                mediainfo,
+                media_type,
+                season,
+                missing_episodes=missing_episodes,
+                total_episode=total_episode,
+                is_best_version=is_best_version,
+                history_score_movie=history_score_movie,
+                history_score_by_ep=history_score_by_ep,
+            )
         elif source == "pansou":
             if media_type == MediaType.MOVIE:
                 return self._search_pansou_movie(mediainfo)
@@ -311,7 +346,12 @@ class SearchHandler:
         self,
         mediainfo: MediaInfo,
         media_type: MediaType,
-        season: Optional[int] = None
+        season: Optional[int] = None,
+        missing_episodes: Optional[Set[int]] = None,
+        total_episode: Optional[int] = None,
+        is_best_version: bool = False,
+        history_score_movie: Optional[int] = None,
+        history_score_by_ep: Optional[Dict[int, int]] = None,
     ) -> List[Dict]:
         """
         使用 HDHive 搜索资源
@@ -329,11 +369,23 @@ class SearchHandler:
             return []
 
         hdhive_media_type = "movie" if media_type == MediaType.MOVIE else "tv"
+        score_ctx = ScoreContext(
+            media_type="movie" if media_type == MediaType.MOVIE else "tv",
+            season=season,
+            missing_episodes=set(missing_episodes or set()) or None,
+            total_episode=total_episode,
+            is_best_version=bool(is_best_version),
+            history_score_movie=history_score_movie,
+            history_score_by_ep=history_score_by_ep,
+            max_unlock_points=int(self._hdhive_max_unlock_points or 50),
+            max_points_per_sub=int(self._hdhive_max_points_per_sub or 20),
+            free_unlock_top_n=3,
+        )
 
         if self._hdhive_query_mode == "playwright":
-            return self._search_hdhive_playwright(mediainfo, hdhive_media_type)
+            return self._search_hdhive_playwright(mediainfo, hdhive_media_type, score_ctx)
         else:
-            return self._search_hdhive_api(mediainfo, hdhive_media_type)
+            return self._search_hdhive_api(mediainfo, hdhive_media_type, score_ctx)
 
     def _get_hdhive_browser_client(self):
         """Create or reuse the HDHive browser client."""
@@ -354,7 +406,67 @@ class SearchHandler:
         )
         return self._hdhive_browser_client
 
-    def _search_hdhive_playwright(self, mediainfo: MediaInfo, hdhive_media_type: str) -> List[Dict]:
+    def _finalize_hdhive_candidates(
+        self,
+        candidates: List[Dict],
+        score_ctx: ScoreContext,
+        unlock_free_fn,
+        mode_label: str,
+    ) -> List[Dict]:
+        """
+        闭环：评分排序 → 免费 TopN 取链 → 付费延后 need_unlock
+        """
+        if not candidates:
+            return []
+
+        ranked = ResourceRanker.rank(candidates, score_ctx)
+        if not ranked:
+            return []
+
+        free_top_n = max(1, int(score_ctx.free_unlock_top_n or 3))
+        free_unlocked = 0
+        results: List[Dict] = []
+
+        for item in ranked:
+            need_free_unlock = bool(item.pop("_free_pending_unlock", False))
+            if need_free_unlock:
+                if free_unlocked >= free_top_n:
+                    # 超出 TopN 的免费包也保留为延后解锁形态，避免浪费
+                    item["need_unlock"] = True
+                    item["url"] = ""
+                    item.setdefault("unlock_points", 0)
+                    results.append(item)
+                    continue
+                slug = item.get("slug") or ""
+                try:
+                    share_url = unlock_free_fn(slug, item)
+                except Exception as e:
+                    logger.error(f"HDHive ({mode_label}) 免费资源取链接失败: {slug}, 错误: {e}")
+                    continue
+                if not share_url:
+                    logger.error(f"HDHive ({mode_label}) 免费资源未返回分享链接: {slug}")
+                    continue
+                item["url"] = share_url
+                item["need_unlock"] = False
+                free_unlocked += 1
+                results.append(item)
+            else:
+                results.append(item)
+
+        free_cnt = sum(1 for r in results if not r.get("need_unlock"))
+        paid_cnt = sum(1 for r in results if r.get("need_unlock"))
+        logger.info(
+            f"HDHive ({mode_label}) 闭环完成：返回 {len(results)} 个资源 "
+            f"(已取链免费={free_cnt}, 待解锁={paid_cnt}, free_top_n={free_top_n})"
+        )
+        return results
+
+    def _search_hdhive_playwright(
+        self,
+        mediainfo: MediaInfo,
+        hdhive_media_type: str,
+        score_ctx: ScoreContext,
+    ) -> List[Dict]:
         """
         使用 Playwright 浏览器模拟模式查询 HDHive 资源。
         Cookie 优先，账号密码作为 Cookie 缺失时的登录兜底。
@@ -409,7 +521,6 @@ class SearchHandler:
 
                 if is_free:
                     free_count += 1
-                    # 先只收集，不立刻解锁：等按覆盖集数排序后再解，避免先解 1-12 再解 1-16
                     candidates.append({
                         "url": "",
                         "title": title,
@@ -417,8 +528,11 @@ class SearchHandler:
                         "slug": slug,
                         "need_unlock": False,
                         "unlock_points": 0,
+                        "is_free": True,
                         "is_official": bool(resource.get("is_official")),
                         "episode_span": episode_span,
+                        "resolution": resource.get("resolution") or "",
+                        "size": resource.get("size") or "",
                         "_free_pending_unlock": True,
                     })
                 elif self._hdhive_auto_unlock:
@@ -430,8 +544,11 @@ class SearchHandler:
                         "slug": slug,
                         "need_unlock": True,
                         "unlock_points": unlock_points or 0,
+                        "is_free": False,
                         "is_official": bool(resource.get("is_official")),
                         "episode_span": episode_span,
+                        "resolution": resource.get("resolution") or "",
+                        "size": resource.get("size") or "",
                     })
                 else:
                     skipped_auto_unlock += 1
@@ -445,51 +562,27 @@ class SearchHandler:
                 )
                 return []
 
-            # 覆盖集数优先排序，再对免费资源取链
-            candidates = sort_share_resources(candidates)
-            logger.info(
-                "HDHive (Playwright) 候选排序完成: "
-                + " | ".join(
-                    f"{c.get('title','')[:40]}(span={c.get('episode_span',0)},"
-                    f"{'付费'+str(c.get('unlock_points',0)) if c.get('need_unlock') else '免费'})"
-                    for c in candidates[:8]
-                )
-            )
+            def _unlock_free(slug: str, item: Dict) -> str:
+                unlock_data = client.unlock_resource(slug)
+                return unlock_data.get("full_url") or unlock_data.get("url") or ""
 
-            results = []
-            for item in candidates:
-                if item.pop("_free_pending_unlock", False):
-                    slug = item.get("slug") or ""
-                    try:
-                        unlock_data = client.unlock_resource(slug)
-                    except Exception as e:
-                        logger.error(f"HDHive (Playwright) 免费资源取链接失败: {slug}, 错误: {e}")
-                        continue
-                    share_url = unlock_data.get("full_url") or unlock_data.get("url") or ""
-                    if not share_url:
-                        logger.error(f"HDHive (Playwright) 免费资源未返回分享链接: {slug}")
-                        continue
-                    item["url"] = share_url
-                    # 免费已取到链接，转存阶段无需再 need_unlock
-                    item["need_unlock"] = False
-                    results.append(item)
-                else:
-                    # 付费：保持 need_unlock，转存阶段按序解锁
-                    results.append(item)
-
-            result_free_count = sum(1 for r in results if not r.get("need_unlock"))
-            result_unlock_count = sum(1 for r in results if r.get("need_unlock"))
-            logger.info(
-                f"HDHive (Playwright) 共得到 {len(results)} 个可用 115 资源"
-                f"（免费: {result_free_count}, 待自费解锁: {result_unlock_count}）"
+            return self._finalize_hdhive_candidates(
+                candidates=candidates,
+                score_ctx=score_ctx,
+                unlock_free_fn=_unlock_free,
+                mode_label="Playwright",
             )
-            return results
 
         except Exception as e:
             logger.error(f"HDHive (Playwright) 查询失败: {e}")
             return []
 
-    def _search_hdhive_api(self, mediainfo: MediaInfo, hdhive_media_type: str) -> List[Dict]:
+    def _search_hdhive_api(
+        self,
+        mediainfo: MediaInfo,
+        hdhive_media_type: str,
+        score_ctx: ScoreContext,
+    ) -> List[Dict]:
         """
         使用 API 模式查询 HDHive 资源
         需要应用 Secret + 用户授权（OpenAPI 客户端）
@@ -520,20 +613,6 @@ class SearchHandler:
             resources = [ resource for resource in resources if resource.get("pan_type") == "115" ]
             logger.info(f"HDHive (API) 找到 {len(resources)} 个115网盘资源，开始过滤...")
             for resource in resources:
-                # 过滤出可能是115网盘的且免费的资源 (0或者null)，或者如果开启了自动解锁，则都可以尝试
-                
-                # # 1. 前置过滤：根据 website 属性判断是否是 115 网盘
-                # website = resource.get("website")
-                # if isinstance(website, dict):
-                #     website_value = str(website.get("value", ""))
-                #     if website_value and website_value != "115":
-                #         logger.info(f"HDHive (API) 资源 {resource.get('title')} 的 website_value 不是 115 ({website_value})，跳过")
-                #         continue
-                # elif isinstance(website, str):
-                #     if website and website != "115":
-                #         logger.info(f"HDHive (API) 资源 {resource.get('title')} 的 website 不是 115 ({website})，跳过")
-                #         continue
-                
                 # 2. 免费策略/积分判断
                 unlock_points = resource.get("unlock_points")
                 is_free = unlock_points is None or unlock_points == 0 or resource.get("is_unlocked")
@@ -564,55 +643,37 @@ class SearchHandler:
                         "slug": slug,
                         "need_unlock": not is_free,
                         "unlock_points": 0 if is_free else (unlock_points or 0),
+                        "is_free": bool(is_free),
                         "is_official": bool(resource.get("is_official")),
                         "episode_span": episode_span,
+                        "resolution": resource.get("resolution") or "",
+                        "size": resource.get("size") or "",
                         "_free_pending_unlock": bool(is_free),
                     })
                 else:
                     logger.info(f"HDHive (API) 资源 {resource.get('title')} 非免费且未开启自动解锁，已跳过")
 
-            if free_115_resources:
-                free_115_resources = sort_share_resources(free_115_resources)
-                logger.info(
-                    "HDHive (API) 候选排序完成: "
-                    + " | ".join(
-                        f"{c.get('title','')[:40]}(span={c.get('episode_span',0)},"
-                        f"{'付费'+str(c.get('unlock_points',0)) if c.get('need_unlock') else '免费'})"
-                        for c in free_115_resources[:8]
-                    )
-                )
-
-                results = []
-                for item in free_115_resources:
-                    if item.pop("_free_pending_unlock", False):
-                        slug = item.get("slug") or ""
-                        logger.info(f"HDHive (API) 尝试免费解锁资源: {slug} (span={item.get('episode_span',0)})")
-                        try:
-                            unlock_data = self._hdhive_client.unlock_resource(slug)
-                        except HDHiveOpenAPIError as e:
-                            logger.error(f"HDHive (API) 解锁请求失败: [{e.code}] {e.message} {e.description}")
-                            continue
-                        if unlock_data.get("success") and unlock_data.get("data"):
-                            share_url = unlock_data["data"].get("full_url", "")
-                            if not share_url:
-                                logger.error(f"HDHive (API) 免费资源未返回分享链接: {slug}")
-                                continue
-                            logger.info(f"HDHive (API) 成功解锁免费资源, 分享链接: {share_url}")
-                            item["url"] = share_url
-                            item["need_unlock"] = False
-                            results.append(item)
-                        else:
-                            logger.error(f"HDHive (API) 解锁失败，返回数据异常或非成功: {unlock_data}")
-                    else:
-                        results.append(item)
-
-                free_count = sum(1 for r in results if not r.get("need_unlock"))
-                unlock_count = sum(1 for r in results if r.get("need_unlock"))
-                logger.info(f"HDHive (API) 共得到 {len(results)} 个 115 资源（免费: {free_count}, 待自费解锁: {unlock_count}）")
-                return results
-            else:
+            if not free_115_resources:
                 logger.info(f"HDHive (API) 未找到可用 115 资源")
                 return []
+
+            def _unlock_free(slug: str, item: Dict) -> str:
+                logger.info(f"HDHive (API) 尝试免费解锁资源: {slug} (span={item.get('episode_span',0)})")
+                unlock_data = self._hdhive_client.unlock_resource(slug)
+                if unlock_data.get("success") and unlock_data.get("data"):
+                    share_url = unlock_data["data"].get("full_url", "")
+                    if share_url:
+                        logger.info(f"HDHive (API) 成功解锁免费资源, 分享链接: {share_url}")
+                    return share_url or ""
+                logger.error(f"HDHive (API) 解锁失败，返回数据异常或非成功: {unlock_data}")
+                return ""
+
+            return self._finalize_hdhive_candidates(
+                candidates=free_115_resources,
+                score_ctx=score_ctx,
+                unlock_free_fn=_unlock_free,
+                mode_label="API",
+            )
 
         except Exception as e:
             logger.error(f"HDHive (API) 查询失败: {e}")

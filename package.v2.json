@@ -23,11 +23,12 @@
     "release": true,
     "description": "结合MoviePilot订阅功能，自动搜索115网盘资源并转存缺失剧集。",
     "labels": "订阅,115网盘",
-    "version": "1.6.13",
+    "version": "1.6.14",
     "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/cloud.png",
     "author": "umefigub149",
     "level": 1,
     "history": {
+      "v1.6.14": "闭环HDHive资源评分排序：标题解析+场景排序（电影/剧集补缺/追更/洗版）；免费TopN先取链、付费延后；sync传入缺失集上下文并补齐即停；日志输出预期cover与实际命中。",
       "v1.6.13": "修复HDHive解锁顺序：按标题估算覆盖集数排序（完整1-16优先于1-12）；免费资源先收集排序再解锁，避免页面顺序导致先解不完整包。",
       "v1.6.12": "修复防抢跑漏拦：链事件拦截改看 pending/running/temp_sites 任一命中；auto_search 时无论原站点是否仅115都写入保护标记，避免115还在搜时MP站点下载放行。",
       "v1.6.11": "修复：_should_block_mp_subscribe_download 改用 _new_subscribe_temp_sites 精确判断当前订阅是否在auto_search窗口。追更完成后自动放行，不影响MP后续PT搜索。",
