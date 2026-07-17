@@ -39,7 +39,7 @@ class P115StrgmSub(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "1.6.15"
+    plugin_version = "1.6.16"
     # 插件作者
     plugin_author = "umefigub149"
     # 作者主页
@@ -133,6 +133,8 @@ class P115StrgmSub(_PluginBase):
     # 115 自动搜索成功后的冷却窗口：即使搜完也继续拦截 MP 站点下载，避免“115刚补齐 MP 又下”
     _new_subscribe_cooldown_until: Dict[int, float] = {}
     _post_success_block_seconds: int = 300
+    # 新增订阅自动搜索总超时（秒）：防止 115 API 挂起导致线程永久卡住
+    _auto_search_total_timeout_seconds: int = 900
 
     # 运行时对象
     _pansou_client: Optional[PanSouClient] = None
@@ -734,12 +736,37 @@ class P115StrgmSub(_PluginBase):
                 return
             self._new_subscribe_running.add(sid)
         try:
-            self._search_new_subscribe_now(sid)
+            # 总超时保护：115 API 若挂起，不能让自动搜索线程永久卡死
+            timeout_sec = max(int(getattr(self, "_auto_search_total_timeout_seconds", 900) or 900), 60)
+            from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                fut = ex.submit(self._search_new_subscribe_now, sid)
+                try:
+                    fut.result(timeout=timeout_sec)
+                except FuturesTimeoutError:
+                    logger.error(
+                        f"新增订阅自动搜索超时：订阅ID={sid}，超过 {timeout_sec}s 仍未结束；"
+                        f"强制结束保护窗口并恢复站点，避免永久卡死"
+                    )
+                    # 超时后尽量释放 temp_sites / 恢复原始站点
+                    try:
+                        original_sites = self._new_subscribe_temp_sites.pop(sid, None)
+                        if original_sites is not None and not self._block_system_subscribe:
+                            with SessionFactory() as db:
+                                sub = SubscribeOper(db=db).get(sid)
+                                if sub:
+                                    SubscribeOper(db=db).update(sid, {"sites": original_sites})
+                                    logger.info(
+                                        f"新增订阅自动搜索超时：已恢复原始站点（subscribe_id={sid}）"
+                                    )
+                    except Exception as re:
+                        logger.error(f"新增订阅自动搜索超时后恢复站点失败（subscribe_id={sid}）：{re}")
         except Exception as e:
             logger.error(f"新增订阅自动搜索失败：订阅ID={sid}，错误={e}", exc_info=True)
         finally:
             with self._new_subscribe_search_lock:
                 self._new_subscribe_running.discard(sid)
+                self._new_subscribe_pending.discard(sid)
 
     def _search_new_subscribe_now(self, sid: int) -> bool:
         """只搜索一个新增订阅，复用原有单订阅处理函数，不跑全量同步。

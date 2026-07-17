@@ -3,6 +3,7 @@
 """
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from functools import wraps
 from dataclasses import dataclass, field
@@ -179,6 +180,9 @@ class P115ClientManager:
     DEFAULT_PATH_CACHE_TTL = 3600   # 路径缓存过期时间（秒）
     DEFAULT_MAX_RETRIES = 3         # 最大重试次数
     DEFAULT_JITTER_RATIO = 0.3      # 请求间隔随机抖动比例（±30%）
+    DEFAULT_API_TIMEOUT = 30.0      # 单次 115 API 硬超时（秒），防止请求挂起拖死线程
+    DEFAULT_PATH_OP_TIMEOUT = 45.0  # 建目录/取路径单次硬超时（秒）
+    DEFAULT_BATCH_TRANSFER_TIMEOUT = 300.0  # 整次批量转存总超时（秒）
 
     def __init__(
         self,
@@ -236,15 +240,46 @@ class P115ClientManager:
         self.rate_limiter.wait()
         return func(*args, **kwargs)
 
+    def _call_with_timeout(self, func: Callable, timeout_sec: float, *args, **kwargs):
+        """
+        带硬超时的 API 调用。
+
+        背景：p115client/HTTP 层若长时间不返回也不抛错，会把自动搜索线程永久卡死。
+        这里用独立线程执行调用，超时后对调用方抛 TimeoutError，让上层可失败收尾。
+        注意：底层卡住的工作线程可能仍存活到进程结束，但不会再阻塞业务线程。
+        """
+        timeout_sec = float(timeout_sec or 0)
+        if timeout_sec <= 0:
+            return func(*args, **kwargs)
+        # 单次提交，避免线程池复用导致超时后仍被下一请求复用同一阻塞线程
+        ex = ThreadPoolExecutor(max_workers=1)
+        try:
+            fut = ex.submit(func, *args, **kwargs)
+            try:
+                return fut.result(timeout=timeout_sec)
+            except FuturesTimeoutError as e:
+                raise TimeoutError(
+                    f"115 API 调用超时（>{timeout_sec:.0f}s）: {getattr(func, '__name__', func)}"
+                ) from e
+        finally:
+            # 不阻塞等待卡住的 future；超时后直接放弃等待
+            ex.shutdown(wait=False, cancel_futures=True)
+
+    def _api_call(self, func: Callable, timeout_sec: float = None, *args, **kwargs):
+        """速率限制 + 硬超时 + 计数"""
+        if timeout_sec is None:
+            timeout_sec = self.DEFAULT_API_TIMEOUT
+        self.rate_limiter.wait()
+        self._api_call_count += 1
+        return self._call_with_timeout(func, timeout_sec, *args, **kwargs)
+
     def check_login(self) -> bool:
         """检查登录状态"""
         if not self.client:
             return False
 
         try:
-            self.rate_limiter.wait()
-            self._api_call_count += 1
-            user_info = self.client.user_my_info()
+            user_info = self._api_call(self.client.user_my_info, self.DEFAULT_API_TIMEOUT)
             if user_info.get("state"):
                 uname = user_info.get('data', {}).get('uname', '未知')
                 logger.info(f"115 登录成功: {uname}")
@@ -280,15 +315,16 @@ class P115ClientManager:
         if cached_cid is not None:
             return cached_cid
 
-        # 尝试直接通过 API 获取完整路径
+        # 尝试直接通过 API 获取完整路径（硬超时，防止卡死自动搜索线程）
         try:
-            self.rate_limiter.wait()
-            self._api_call_count += 1
-            resp = self.client.fs_dir_getid(path)
+            logger.info(f"开始获取网盘路径 ID: {path}")
+            resp = self._api_call(self.client.fs_dir_getid, self.DEFAULT_PATH_OP_TIMEOUT, path)
             if resp.get("id"):
                 cid = int(resp["id"])
                 self.path_cache.set(path, cid)
+                logger.info(f"获取网盘路径 ID 成功: {path} -> {cid}")
                 return cid
+            logger.info(f"获取网盘路径 ID 无结果，将尝试创建: {path}, resp={resp}")
         except Exception as e:
             logger.info(f"直接获取路径 ID 失败 ({path}): {e}")
 
@@ -323,11 +359,15 @@ class P115ClientManager:
                 parent_id = cached
                 continue
 
-            # 直接创建目录（fs_makedirs_app 会自动处理已存在的情况）
+            # 直接创建目录（fs_makedirs_app 会自动处理已存在的情况；带硬超时）
             try:
-                self.rate_limiter.wait()
-                self._api_call_count += 1
-                resp = self.client.fs_makedirs_app(part, pid=parent_id)
+                logger.info(f"开始创建网盘目录: {current_path} (pid={parent_id})")
+                resp = self._api_call(
+                    self.client.fs_makedirs_app,
+                    self.DEFAULT_PATH_OP_TIMEOUT,
+                    part,
+                    pid=parent_id,
+                )
                 check_response(resp)
                 if resp.get("state"):
                     cid = int(resp["cid"])
@@ -337,16 +377,19 @@ class P115ClientManager:
                 elif resp.get("errno") == 20004 or "已存在" in resp.get("error", ""):
                     # 目录已存在，尝试获取其 ID
                     try:
-                        self.rate_limiter.wait()
-                        self._api_call_count += 1
-                        get_resp = self.client.fs_dir_getid(current_path)
+                        get_resp = self._api_call(
+                            self.client.fs_dir_getid,
+                            self.DEFAULT_PATH_OP_TIMEOUT,
+                            current_path,
+                        )
                         if get_resp.get("id"):
                             cid = int(get_resp["id"])
                             self.path_cache.set(current_path, cid)
                             parent_id = cid
+                            logger.info(f"目录已存在，获取 ID 成功: {current_path} -> {cid}")
                             continue
-                    except Exception:
-                        pass
+                    except Exception as ge:
+                        logger.warning(f"目录已存在但获取 ID 失败: {current_path}: {ge}")
                     logger.error(f"目录已存在但无法获取ID: {current_path}")
                     return -1
                 else:
@@ -750,11 +793,17 @@ class P115ClientManager:
             logger.error("无效的分享链接或解析失败")
             return success_ids, file_ids
 
-        # 获取目标目录 CID（只需获取一次）
-        parent_id = self.get_pid_by_path(save_path, mkdir=True)
+        # 获取目标目录 CID（只需获取一次；内部 API 带硬超时）
+        logger.info(f"批量转存：开始获取/创建目标目录: {save_path}，文件数={len(file_ids)}")
+        try:
+            parent_id = self.get_pid_by_path(save_path, mkdir=True)
+        except Exception as e:
+            logger.error(f"获取/创建目标目录异常: {save_path}: {e}")
+            return success_ids, file_ids
         if parent_id == -1:
             logger.error(f"无法获取或创建目标目录: {save_path}")
             return success_ids, file_ids
+        logger.info(f"批量转存：目标目录就绪 cid={parent_id} path={save_path}")
 
         total_batches = (len(file_ids) + batch_size - 1) // batch_size
         logger.info(f"批量转存: 共 {len(file_ids)} 个文件，分 {total_batches} 批处理（每批 {batch_size} 个）")
@@ -841,9 +890,11 @@ class P115ClientManager:
         last_error = None
         for attempt in range(max_retries + 1):
             try:
-                self.rate_limiter.wait()
-                self._api_call_count += 1
-                resp = self.client.share_receive(payload)
+                logger.info(
+                    f"开始 share_receive 转存: file_id={file_id}, cid={parent_id}, "
+                    f"attempt={attempt + 1}/{max_retries + 1}"
+                )
+                resp = self._api_call(self.client.share_receive, self.DEFAULT_API_TIMEOUT, payload)
 
                 if resp.get("state"):
                     if file_id == "0":
