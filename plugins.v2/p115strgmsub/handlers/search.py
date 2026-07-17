@@ -9,7 +9,7 @@ from app.log import logger
 from app.schemas import MediaInfo
 from app.schemas.types import MediaType
 
-from ..utils import convert_nullbr_to_pansou_format
+from ..utils import convert_nullbr_to_pansou_format, estimate_resource_episode_span, sort_share_resources
 
 
 class SearchHandler:
@@ -374,7 +374,7 @@ class SearchHandler:
 
             resources = client.get_resources(hdhive_media_type, mediainfo.tmdb_id)
             logger.info(f"HDHive (Playwright) 浏览器返回原始资源: {len(resources)} 个")
-            results = []
+            candidates = []
             skipped_no_slug = 0
             skipped_budget = 0
             skipped_auto_unlock = 0
@@ -385,10 +385,11 @@ class SearchHandler:
                 slug = resource.get("slug", "")
                 unlock_points = resource.get("unlock_points")
                 is_free = resource.get("is_free") or resource.get("is_unlocked") or unlock_points in (None, 0)
+                episode_span = estimate_resource_episode_span(title)
 
                 logger.info(
                     f"HDHive (Playwright) 处理资源: title='{title}', slug='{slug}', "
-                    f"unlock_points={unlock_points}, is_free={is_free}"
+                    f"unlock_points={unlock_points}, is_free={is_free}, episode_span={episode_span}"
                 )
 
                 if not slug:
@@ -408,48 +409,80 @@ class SearchHandler:
 
                 if is_free:
                     free_count += 1
-                    try:
-                        unlock_data = client.unlock_resource(slug)
-                    except Exception as e:
-                        logger.error(f"HDHive (Playwright) 免费资源取链接失败: {slug}, 错误: {e}")
-                        continue
-                    share_url = unlock_data.get("full_url") or unlock_data.get("url") or ""
-                    if share_url:
-                        results.append({
-                            "url": share_url,
-                            "title": title,
-                            "update_time": resource.get("created_at", ""),
-                            "is_official": bool(resource.get("is_official"))
-                        })
+                    # 先只收集，不立刻解锁：等按覆盖集数排序后再解，避免先解 1-12 再解 1-16
+                    candidates.append({
+                        "url": "",
+                        "title": title,
+                        "update_time": resource.get("created_at", ""),
+                        "slug": slug,
+                        "need_unlock": False,
+                        "unlock_points": 0,
+                        "is_official": bool(resource.get("is_official")),
+                        "episode_span": episode_span,
+                        "_free_pending_unlock": True,
+                    })
                 elif self._hdhive_auto_unlock:
                     unlock_count += 1
-                    results.append({
+                    candidates.append({
                         "url": "",
                         "title": title,
                         "update_time": resource.get("created_at", ""),
                         "slug": slug,
                         "need_unlock": True,
                         "unlock_points": unlock_points or 0,
-                        "is_official": bool(resource.get("is_official"))
+                        "is_official": bool(resource.get("is_official")),
+                        "episode_span": episode_span,
                     })
                 else:
                     skipped_auto_unlock += 1
                     logger.info(f"HDHive (Playwright) 资源 {title} 非免费且未开启自动解锁，已跳过")
 
-            if results:
-                results.sort(key=lambda r: (
-                    r.get("need_unlock", False),
-                    not r.get("is_official", False)
-                ))
-                result_free_count = sum(1 for r in results if not r.get("need_unlock"))
-                result_unlock_count = sum(1 for r in results if r.get("need_unlock"))
-                logger.info(f"HDHive (Playwright) 共得到 {len(results)} 个可用 115 资源（免费: {result_free_count}, 待自费解锁: {result_unlock_count}）")
-            else:
+            if not candidates:
                 logger.info(
                     f"HDHive (Playwright) 未找到可用 115 资源。"
                     f"浏览器原始资源: {len(resources)}，免费候选: {free_count}，待解锁候选: {unlock_count}，"
                     f"缺少slug跳过: {skipped_no_slug}，预算跳过: {skipped_budget}，自动解锁关闭跳过: {skipped_auto_unlock}"
                 )
+                return []
+
+            # 覆盖集数优先排序，再对免费资源取链
+            candidates = sort_share_resources(candidates)
+            logger.info(
+                "HDHive (Playwright) 候选排序完成: "
+                + " | ".join(
+                    f"{c.get('title','')[:40]}(span={c.get('episode_span',0)},"
+                    f"{'付费'+str(c.get('unlock_points',0)) if c.get('need_unlock') else '免费'})"
+                    for c in candidates[:8]
+                )
+            )
+
+            results = []
+            for item in candidates:
+                if item.pop("_free_pending_unlock", False):
+                    slug = item.get("slug") or ""
+                    try:
+                        unlock_data = client.unlock_resource(slug)
+                    except Exception as e:
+                        logger.error(f"HDHive (Playwright) 免费资源取链接失败: {slug}, 错误: {e}")
+                        continue
+                    share_url = unlock_data.get("full_url") or unlock_data.get("url") or ""
+                    if not share_url:
+                        logger.error(f"HDHive (Playwright) 免费资源未返回分享链接: {slug}")
+                        continue
+                    item["url"] = share_url
+                    # 免费已取到链接，转存阶段无需再 need_unlock
+                    item["need_unlock"] = False
+                    results.append(item)
+                else:
+                    # 付费：保持 need_unlock，转存阶段按序解锁
+                    results.append(item)
+
+            result_free_count = sum(1 for r in results if not r.get("need_unlock"))
+            result_unlock_count = sum(1 for r in results if r.get("need_unlock"))
+            logger.info(
+                f"HDHive (Playwright) 共得到 {len(results)} 个可用 115 资源"
+                f"（免费: {result_free_count}, 待自费解锁: {result_unlock_count}）"
+            )
             return results
 
         except Exception as e:
@@ -522,51 +555,61 @@ class SearchHandler:
                         logger.info(f"HDHive (API) 资源缺少 slug，跳过: {resource}")
                         continue
 
-                    # 如果免费，则直接解锁并获取链接
-                    if is_free:
-                        logger.info(f"HDHive (API) 尝试免费解锁资源: {slug}")
+                    episode_span = estimate_resource_episode_span(resource.get("title", ""))
+                    # 免费与付费都先收集，排序后再对免费资源取链
+                    free_115_resources.append({
+                        "url": "",
+                        "title": resource.get("title", ""),
+                        "update_time": resource.get("created_at", ""),
+                        "slug": slug,
+                        "need_unlock": not is_free,
+                        "unlock_points": 0 if is_free else (unlock_points or 0),
+                        "is_official": bool(resource.get("is_official")),
+                        "episode_span": episode_span,
+                        "_free_pending_unlock": bool(is_free),
+                    })
+                else:
+                    logger.info(f"HDHive (API) 资源 {resource.get('title')} 非免费且未开启自动解锁，已跳过")
+
+            if free_115_resources:
+                free_115_resources = sort_share_resources(free_115_resources)
+                logger.info(
+                    "HDHive (API) 候选排序完成: "
+                    + " | ".join(
+                        f"{c.get('title','')[:40]}(span={c.get('episode_span',0)},"
+                        f"{'付费'+str(c.get('unlock_points',0)) if c.get('need_unlock') else '免费'})"
+                        for c in free_115_resources[:8]
+                    )
+                )
+
+                results = []
+                for item in free_115_resources:
+                    if item.pop("_free_pending_unlock", False):
+                        slug = item.get("slug") or ""
+                        logger.info(f"HDHive (API) 尝试免费解锁资源: {slug} (span={item.get('episode_span',0)})")
                         try:
                             unlock_data = self._hdhive_client.unlock_resource(slug)
                         except HDHiveOpenAPIError as e:
                             logger.error(f"HDHive (API) 解锁请求失败: [{e.code}] {e.message} {e.description}")
                             continue
-
                         if unlock_data.get("success") and unlock_data.get("data"):
                             share_url = unlock_data["data"].get("full_url", "")
+                            if not share_url:
+                                logger.error(f"HDHive (API) 免费资源未返回分享链接: {slug}")
+                                continue
                             logger.info(f"HDHive (API) 成功解锁免费资源, 分享链接: {share_url}")
-                            free_115_resources.append({
-                                "url": share_url,
-                                "title": resource.get("title", ""),
-                                "update_time": resource.get("created_at", ""),
-                                "is_official": bool(resource.get("is_official"))
-                            })
+                            item["url"] = share_url
+                            item["need_unlock"] = False
+                            results.append(item)
                         else:
                             logger.error(f"HDHive (API) 解锁失败，返回数据异常或非成功: {unlock_data}")
                     else:
-                        # 对于非免费资源，延迟解锁：返回标记并携带 slug，后续供 SyncHandler 按需调用 unlock
-                        logger.info(f"HDHive (API) 收费资源将其加入列表延迟解锁: {slug}")
-                        free_115_resources.append({
-                            "url": "",  # 此时没有真正的链接
-                            "title": resource.get("title", ""),
-                            "update_time": resource.get("created_at", ""),
-                            "slug": slug,
-                            "need_unlock": True,
-                            "unlock_points": unlock_points,
-                            "is_official": bool(resource.get("is_official"))
-                        })
-                else:
-                    logger.info(f"HDHive (API) 资源 {resource.get('title')} 非免费且未开启自动解锁，已跳过")
+                        results.append(item)
 
-            if free_115_resources:
-                # 排序：免费优先，同组内官方(is_official)优先
-                free_115_resources.sort(key=lambda r: (
-                    r.get("need_unlock", False),      # False(免费) 排前面
-                    not r.get("is_official", False)    # True(官方) 排前面
-                ))
-                free_count = sum(1 for r in free_115_resources if not r.get("need_unlock"))
-                unlock_count = sum(1 for r in free_115_resources if r.get("need_unlock"))
-                logger.info(f"HDHive (API) 共得到 {len(free_115_resources)} 个 115 资源（免费: {free_count}, 待自费解锁: {unlock_count}）")
-                return free_115_resources
+                free_count = sum(1 for r in results if not r.get("need_unlock"))
+                unlock_count = sum(1 for r in results if r.get("need_unlock"))
+                logger.info(f"HDHive (API) 共得到 {len(results)} 个 115 资源（免费: {free_count}, 待自费解锁: {unlock_count}）")
+                return results
             else:
                 logger.info(f"HDHive (API) 未找到可用 115 资源")
                 return []
