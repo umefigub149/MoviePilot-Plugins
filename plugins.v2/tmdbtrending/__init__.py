@@ -28,7 +28,7 @@ class TmdbTrending(_PluginBase):
     plugin_desc = "订阅 TMDB 趋势、热映、热门、高分及指定分类榜单，支持多榜单并发、年份过滤与去重。"
     plugin_icon = "https://www.themoviedb.org/assets/2/v4/logos/v2/blue_square_2-d537fb228cf3ded904ef09b136fe3fec72548ebc1fea3fbbd1ad9e36364db38b.svg"
     plugin_version = "1.2.4"
-    plugin_author = "MoviePilot-Plugins"
+    plugin_author = "umefigub149"
     plugin_config_prefix = "tmdbtrending_"
     plugin_order = 10
     auth_level = 1

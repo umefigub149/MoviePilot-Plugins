@@ -35,7 +35,7 @@ class DoubanRank(_PluginBase):
     plugin_desc = "直接抓取豆瓣官网数据，支持电影/剧集/综艺分类订阅，支持多榜单、评分年份过滤及智能去重。"
     plugin_icon = "https://img3.doubanio.com/favicon.ico"
     plugin_version = "3.1.2"
-    plugin_author = "outxool"
+    plugin_author = "umefigub149"
     plugin_config_prefix = "doubanrank_"
     plugin_order = 6
     auth_level = 2
