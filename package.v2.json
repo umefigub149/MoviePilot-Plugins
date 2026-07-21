@@ -115,5 +115,48 @@
       "v1.0.1": "增强配置可读性：Dry Run 改为中文“演练模式”；目标存储改为可选 CloudDrive储存/u115/115网盘Plus/local 的下拉输入；新增追更/分享目录解析测试 API；增强 STRM助手 Hook 状态显示与路径解析失败提示；README 说明与 115strm助手网盘管理的区别。",
       "v1.0.0": "首次发布：支持P115StrgmSub成功转存历史触发固定目录入队；支持P115StrmHelper分享转存成功Hook后延迟入队固定目录；支持CloudDrive储存、路径白名单、防抖和Dry Run。"
     }
+  },
+  "TmdbTrending": {
+    "name": "TMDB趋势订阅",
+    "release": false,
+    "description": "订阅 TMDB 趋势、热映、热门、高分及指定分类榜单，支持多榜单并发、年份过滤与去重。",
+    "labels": "订阅,TMDB,榜单",
+    "version": "1.2.4",
+    "icon": "https://www.themoviedb.org/assets/2/v4/logos/v2/blue_square_2-d537fb228cf3ded904ef09b136fe3fec72548ebc1fea3fbbd1ad9e36364db38b.svg",
+    "author": "outxool",
+    "level": 1,
+    "history": {
+      "v1.2.4": "新增：增加全局忽略日番开关，在订阅非动漫分类时自动过滤日本动画。",
+      "v1.2.3": "修复：修复保存立即运行后配置丢失的问题。",
+      "v1.2.2": "修复：修复立即运行后自动关闭的Bug；修正榜单扫描逻辑，仅检查前N名而非无限订阅。",
+      "v1.2.1": "修复：增加对媒体库已存在资源的检测，防止重复订阅。",
+      "v1.2.0": "重磅升级：支持同时选择多个榜单源；支持直接多选 TMDB 官方分类；逻辑优化。"
+    }
+  },
+  "DoubanRank": {
+    "name": "豆瓣榜单订阅增强版（自用）",
+    "description": "直接抓取豆瓣官网数据，支持电影/剧集/综艺分类订阅，支持多榜单、评分年份过滤及智能去重。",
+    "labels": "订阅,豆瓣",
+    "version": "3.1.2",
+    "icon": "https://img3.doubanio.com/favicon.ico",
+    "author": "outxool",
+    "level": 2,
+    "history": {
+      "v3.1.2": "修复：增加详细调试日志以排查静默跳过问题；优化年份/评分过滤逻辑。",
+      "v3.1.1": "修复：解决年份过滤时类型错误导致的异常。",
+      "v3.1.0": "重构：配置结构重构，支持电影/剧集/综艺分栏多选；支持评分/年份/TopN细分过滤；彻底清除旧版Ghost Tags。"
+    }
+  },
+  "JuyingSignin": {
+    "name": "聚影签到",
+    "description": "聚影站点自动登录并执行每日签到。",
+    "labels": "签到,聚影",
+    "version": "1.0.0",
+    "icon": "https://s3.bmp.ovh/2026/05/05/TEY2AZ6K.png",
+    "author": "outxool",
+    "level": 1,
+    "history": {
+      "v1.0.0": "初版发布：支持聚影站点每日签到、随机延迟、失败重试、通知和历史记录。"
+    }
   }
 }
