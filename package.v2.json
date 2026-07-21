@@ -121,11 +121,12 @@
     "release": false,
     "description": "订阅 TMDB 趋势、热映、热门、高分及指定分类榜单，支持多榜单并发、年份过滤与去重。",
     "labels": "订阅,TMDB,榜单",
-    "version": "1.2.4",
+    "version": "1.2.5",
     "icon": "https://www.themoviedb.org/assets/2/v4/logos/v2/blue_square_2-d537fb228cf3ded904ef09b136fe3fec72548ebc1fea3fbbd1ad9e36364db38b.svg",
     "author": "umefigub149",
     "level": 1,
     "history": {
+      "v1.2.5": "新增：全局「忽略动漫」「忽略纪录片」开关；电影/电视剧扫描跳过 TMDB 动画(16)/纪录(99)；Discovery 主动选择对应分类时不拦截；与原有「忽略日番」并存。",
       "v1.2.4": "新增：增加全局忽略日番开关，在订阅非动漫分类时自动过滤日本动画。",
       "v1.2.3": "修复：修复保存立即运行后配置丢失的问题。",
       "v1.2.2": "修复：修复立即运行后自动关闭的Bug；修正榜单扫描逻辑，仅检查前N名而非无限订阅。",

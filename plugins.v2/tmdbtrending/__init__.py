@@ -1,5 +1,5 @@
 # 强制打印日志
-print("加载 TmdbTrending 插件模块 (v1.2.4)...")
+print("加载 TmdbTrending 插件模块 (v1.2.5)...")
 
 import datetime
 from threading import Thread
@@ -27,7 +27,7 @@ class TmdbTrending(_PluginBase):
     plugin_name = "TMDB趋势订阅"
     plugin_desc = "订阅 TMDB 趋势、热映、热门、高分及指定分类榜单，支持多榜单并发、年份过滤与去重。"
     plugin_icon = "https://www.themoviedb.org/assets/2/v4/logos/v2/blue_square_2-d537fb228cf3ded904ef09b136fe3fec72548ebc1fea3fbbd1ad9e36364db38b.svg"
-    plugin_version = "1.2.4"
+    plugin_version = "1.2.5"
     plugin_author = "umefigub149"
     plugin_config_prefix = "tmdbtrending_"
     plugin_order = 10
@@ -43,7 +43,9 @@ class TmdbTrending(_PluginBase):
     _notify = True
     _onlyonce = False
     _clear_history = False
-    _filter_anime = False # 新增：忽略日番
+    _filter_anime = False  # 忽略日番（16 + JP/ja）
+    _filter_animation = False  # 忽略动漫（任意 16 Animation）
+    _filter_documentary = False  # 忽略纪录片（99）
     _tmdb_api_key = ""
     
     # 电影配置
@@ -81,6 +83,8 @@ class TmdbTrending(_PluginBase):
             self._onlyonce = config.get("onlyonce", False)
             self._clear_history = config.get("clear_history", False)
             self._filter_anime = config.get("filter_anime", False)
+            self._filter_animation = config.get("filter_animation", False)
+            self._filter_documentary = config.get("filter_documentary", False)
             self._tmdb_api_key = config.get("tmdb_api_key", "")
             
             # 电影
@@ -119,6 +123,8 @@ class TmdbTrending(_PluginBase):
             "onlyonce": self._onlyonce,
             "clear_history": self._clear_history,
             "filter_anime": self._filter_anime,
+            "filter_animation": self._filter_animation,
+            "filter_documentary": self._filter_documentary,
             "tmdb_api_key": self._tmdb_api_key,
             
             "movie_enabled": self._movie_enabled,
@@ -281,6 +287,17 @@ class TmdbTrending(_PluginBase):
                     {
                         'component': 'VRow',
                         'content': [
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [
+                                {'component': 'VSwitch', 'props': {'model': 'filter_animation', 'label': '忽略动漫(动画分类)'}}
+                            ]},
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [
+                                {'component': 'VSwitch', 'props': {'model': 'filter_documentary', 'label': '忽略纪录片'}}
+                            ]}
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
                             {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [
                                 {'component': 'VCronField', 'props': {'model': 'cron', 'label': '执行周期'}}
                             ]},
@@ -345,6 +362,8 @@ class TmdbTrending(_PluginBase):
             "clear_history": False,
             "notify": True,
             "filter_anime": False,
+            "filter_animation": False,
+            "filter_documentary": False,
             "cron": "0 10 * * *",
             "tmdb_api_key": "",
             # Movie
@@ -553,20 +572,39 @@ class TmdbTrending(_PluginBase):
                             if int(year) < min_year: continue
                         except ValueError: continue
 
-                    # 日番判断逻辑
-                    genre_ids = item.get('genre_ids', [])
-                    origin_country = item.get('origin_country', [])
-                    lang = item.get('original_language', '')
-                    # 判定标准：分类含动画(16) 且 (产地JP 或 语言ja)
+                    # 分类 / 产地 / 语言
+                    genre_ids = item.get('genre_ids', []) or []
+                    origin_country = item.get('origin_country', []) or []
+                    lang = item.get('original_language', '') or ''
+                    # 日番：分类含动画(16) 且 (产地JP 或 语言ja)
                     is_jp_anime = 16 in genre_ids and ('JP' in origin_country or lang == 'ja')
+                    # 动漫：任意 Animation(16)
+                    is_animation = 16 in genre_ids
+                    # 纪录片：Documentary(99)
+                    is_documentary = 99 in genre_ids
 
                     if is_anime_logic:
-                        # 动漫模式：只取日番
-                        if not is_jp_anime: continue
+                        # 独立动漫预设：只取日番；不受下方三类「忽略」开关影响
+                        if not is_jp_anime:
+                            continue
                     else:
-                        # 普通模式：如果开启了忽略日番，则过滤
+                        # 普通电影/电视剧
                         if self._filter_anime and is_jp_anime:
                             logger.info(f"跳过 {title}: 检测为日番且已开启忽略")
+                            continue
+
+                        discover_wants_animation = (
+                            source == "discover" and str(genre_id) == "16"
+                        )
+                        if self._filter_animation and is_animation and not discover_wants_animation:
+                            logger.info(f"跳过 {title}: 检测为动漫/动画且已开启忽略")
+                            continue
+
+                        discover_wants_doc = (
+                            source == "discover" and str(genre_id) == "99"
+                        )
+                        if self._filter_documentary and is_documentary and not discover_wants_doc:
+                            logger.info(f"跳过 {title}: 检测为纪录片且已开启忽略")
                             continue
                     
                     unique_key = f"{category_label}:{tmdb_id}"
